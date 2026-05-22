@@ -84,9 +84,11 @@ fun AgentHubScreen() {
     
     // Config states
     var serverUrl by remember { mutableStateOf(sharedPrefs.getString("SERVER_URL", "ws://192.168.100.13:3001") ?: "") }
-    var chatGptToken by remember { mutableStateOf(sharedPrefs.getString("CHATGPT_ACCESS_TOKEN", "") ?: "") }
-    var geminiCookie by remember { mutableStateOf(sharedPrefs.getString("GEMINI_COOKIE_1PSID", "") ?: "") }
-    var kiroToken by remember { mutableStateOf(sharedPrefs.getString("KIRO_AUTH_TOKEN", "") ?: "") }
+    var codexSession by remember { mutableStateOf(sharedPrefs.getString("CODEX_SESSION", "") ?: "") }
+    var geminiSession by remember { mutableStateOf(sharedPrefs.getString("GEMINI_SESSION", "") ?: "") }
+    var kiroSession by remember { mutableStateOf(sharedPrefs.getString("KIRO_SESSION", "") ?: "") }
+    var windsurfSession by remember { mutableStateOf(sharedPrefs.getString("WINDSURF_SESSION", "") ?: "") }
+    var opencodeSession by remember { mutableStateOf(sharedPrefs.getString("OPENCODE_SESSION", "") ?: "") }
 
     val listState = rememberLazyListState()
 
@@ -103,9 +105,11 @@ fun AgentHubScreen() {
                 val configMsg = JSONObject()
                 configMsg.put("type", "config")
                 val configObj = JSONObject()
-                configObj.put("CHATGPT_ACCESS_TOKEN", chatGptToken)
-                configObj.put("GEMINI_COOKIE_1PSID", geminiCookie)
-                configObj.put("KIRO_AUTH_TOKEN", kiroToken)
+                configObj.put("CODEX_SESSION", codexSession)
+                configObj.put("GEMINI_SESSION", geminiSession)
+                configObj.put("KIRO_SESSION", kiroSession)
+                configObj.put("WINDSURF_SESSION", windsurfSession)
+                configObj.put("OPENCODE_SESSION", opencodeSession)
                 configMsg.put("config", configObj)
                 webSocket.send(configMsg.toString())
             }
@@ -177,36 +181,50 @@ fun AgentHubScreen() {
             onDismissRequest = { showSettings = false },
             title = { Text("Settings") },
             text = {
-                Column {
-                    OutlinedTextField(
-                        value = serverUrl,
-                        onValueChange = { serverUrl = it },
-                        label = { Text("Server WS URL") }
-                    )
-                    OutlinedTextField(
-                        value = chatGptToken,
-                        onValueChange = { chatGptToken = it },
-                        label = { Text("ChatGPT Access Token") }
-                    )
-                    OutlinedTextField(
-                        value = geminiCookie,
-                        onValueChange = { geminiCookie = it },
-                        label = { Text("Gemini __Secure-1PSID") }
-                    )
-                    OutlinedTextField(
-                        value = kiroToken,
-                        onValueChange = { kiroToken = it },
-                        label = { Text("Kiro Auth Token") }
-                    )
+                LazyColumn {
+                    item {
+                        OutlinedTextField(
+                            value = serverUrl,
+                            onValueChange = { serverUrl = it },
+                            label = { Text("Server WS URL") }
+                        )
+                        OutlinedTextField(
+                            value = codexSession,
+                            onValueChange = { codexSession = it },
+                            label = { Text("Codex Session Cookie") }
+                        )
+                        OutlinedTextField(
+                            value = geminiSession,
+                            onValueChange = { geminiSession = it },
+                            label = { Text("Gemini Session (__Secure-1PSID)") }
+                        )
+                        OutlinedTextField(
+                            value = kiroSession,
+                            onValueChange = { kiroSession = it },
+                            label = { Text("Kiro Session") }
+                        )
+                        OutlinedTextField(
+                            value = windsurfSession,
+                            onValueChange = { windsurfSession = it },
+                            label = { Text("Windsurf Session") }
+                        )
+                        OutlinedTextField(
+                            value = opencodeSession,
+                            onValueChange = { opencodeSession = it },
+                            label = { Text("OpenCode Session") }
+                        )
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     sharedPrefs.edit()
                         .putString("SERVER_URL", serverUrl)
-                        .putString("CHATGPT_ACCESS_TOKEN", chatGptToken)
-                        .putString("GEMINI_COOKIE_1PSID", geminiCookie)
-                        .putString("KIRO_AUTH_TOKEN", kiroToken)
+                        .putString("CODEX_SESSION", codexSession)
+                        .putString("GEMINI_SESSION", geminiSession)
+                        .putString("KIRO_SESSION", kiroSession)
+                        .putString("WINDSURF_SESSION", windsurfSession)
+                        .putString("OPENCODE_SESSION", opencodeSession)
                         .apply()
                     showSettings = false
                     connectWs()
