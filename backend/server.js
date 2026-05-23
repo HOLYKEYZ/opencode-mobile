@@ -203,22 +203,32 @@ async function streamSSE(response, ws) {
 }
 
 async function runCodexCloud(ws, cfg, prompt) {
-  const session = cfg.CODEX_SESSION;
-  if (!session) return send(ws, { type: 'error', content: 'Codex session not set. Connect relay or configure in settings.' });
   const m = cfg.CODEX_MODEL || DEFAULTS.codex;
-  send(ws, { type: 'status', content: `🤖 Codex (${m})...` });
-  const body = { model: m, messages: [{ role: 'user', content: prompt }], stream: true };
-  let resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST', headers: { 'Authorization': `Bearer ${session}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    resp = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST', headers: { 'Authorization': `Bearer ${session}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m, input: prompt, stream: true }),
-    });
-    if (!resp.ok) { const t = await resp.text().catch(() => ''); send(ws, { type: 'error', content: `Codex error: ${resp.status} ${t}` }); return; }
+  // Try each possible API key in order: OpenCode OpenAI key, then Codex JWT
+  const keys = [];
+  if (cfg.OPENCODE_SESSION) keys.push(cfg.OPENCODE_SESSION);
+  if (cfg.CODEX_SESSION) keys.push(cfg.CODEX_SESSION);
+  if (cfg.OPENCODE_PROVIDERS) {
+    try {
+      const p = typeof cfg.OPENCODE_PROVIDERS === 'string' ? JSON.parse(cfg.OPENCODE_PROVIDERS) : cfg.OPENCODE_PROVIDERS;
+      for (const k of Object.values(p)) { if (String(k).startsWith('sk-')) keys.push(String(k)); }
+    } catch {}
   }
-  await streamSSE(resp, ws);
-  send(ws, { type: 'done', content: `\n✅ Codex (${m}) complete.` });
+  if (!keys.length) return send(ws, { type: 'error', content: 'No API keys available for cloud mode. Connect desktop relay to use local agents.' });
+  send(ws, { type: 'status', content: `🤖 Codex (${m}) via cloud...` });
+  for (const key of keys) {
+    const body = { model: m, messages: [{ role: 'user', content: prompt }], stream: true };
+    let resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST', headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      resp = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST', headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m, input: prompt, stream: true }),
+      });
+    }
+    if (resp.ok) { await streamSSE(resp, ws); send(ws, { type: 'done', content: `\n✅ Codex (${m}) complete.` }); return; }
+  }
+  send(ws, { type: 'error', content: 'All API keys failed for Codex. Connect desktop relay to use local agents.' });
 }
 
 async function runOpenCodeCloud(ws, cfg, prompt) {
