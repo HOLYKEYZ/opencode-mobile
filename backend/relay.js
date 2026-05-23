@@ -12,31 +12,40 @@ const isWin = os.platform() === 'win32';
 
 function readCodexConfig() {
   try {
-    const configPath = path.join(os.homedir(), '.codex', 'config.toml');
-    if (!fs.existsSync(configPath)) return {};
-    const raw = fs.readFileSync(configPath, 'utf-8');
-    const model = raw.match(/model\s*=\s*"([^"]+)"/)?.[1];
-    const accessToken = raw.match(/access_token\s*=\s*"([^"]+)"/)?.[1];
-    const apiKey = raw.match(/api_key\s*=\s*"([^"]+)"/)?.[1];
+    const authPath = path.join(os.homedir(), '.codex', 'auth.json');
+    if (!fs.existsSync(authPath)) return {};
+    const auth = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
     const cfg = {};
-    if (model) cfg.CODEX_MODEL = model;
-    if (accessToken) cfg.CODEX_SESSION = accessToken;
-    else if (apiKey) cfg.CODEX_SESSION = apiKey;
+    // Model from config.toml
+    const configPath = path.join(os.homedir(), '.codex', 'config.toml');
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, 'utf-8');
+      const model = raw.match(/model\s*=\s*"([^"]+)"/)?.[1];
+      if (model) cfg.CODEX_MODEL = model;
+    }
+    // Auth tokens from auth.json (ChatGPT OAuth)
+    const token = auth.tokens?.access_token;
+    if (token) cfg.CODEX_SESSION = token;
+    if (auth.OPENAI_API_KEY) cfg.CODEX_SESSION = auth.OPENAI_API_KEY;
     return cfg;
   } catch { return {}; }
 }
 
 function readOpenCodeConfig() {
   try {
-    const authPath = path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json');
+    const authPath = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'opencode', 'auth.json');
     if (!fs.existsSync(authPath)) return {};
     const auth = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
     const cfg = {};
-    // Find first valid API key
+    const providers = {};
     for (const [provider, creds] of Object.entries(auth)) {
-      const key = creds.api_key || creds.apiKey || creds.token;
-      if (key) { cfg.OPENCODE_SESSION = String(key); break; }
+      const key = creds.key || creds.api_key || creds.apiKey || creds.token;
+      if (key) {
+        providers[provider] = String(key);
+        if (!cfg.OPENCODE_SESSION) cfg.OPENCODE_SESSION = String(key);
+      }
     }
+    if (Object.keys(providers).length > 1) cfg.OPENCODE_PROVIDERS = providers;
     return cfg;
   } catch { return {}; }
 }
@@ -141,11 +150,25 @@ function printQR(code) {
   const qrPayload = `${SERVER_URL}?code=${code}`;
   QRCode.toString(qrPayload, { type: 'terminal', small: true }, (err, qr) => {
     if (err) return;
-    console.log(`\n📱 Scan to connect:`);
+    console.log(`\n═══════════════════════════════════════`);
+    console.log(`📱 SCAN THIS QR CODE WITH AGENT HUB APP`);
+    console.log(`═══════════════════════════════════════`);
     console.log(qr);
-    console.log(`   WS: ${qrPayload}`);
-    console.log(`   Code: ${code}\n`);
+    console.log(`   Session Code: ${code}`);
+    console.log(`   Server:       ${SERVER_URL}`);
+    console.log(`   URL:          ${qrPayload}`);
+    console.log(`═══════════════════════════════════════\n`);
+    // Also show a compact URL-only version
+    console.log(`   Or enter code manually: ${code}\n`);
   });
+  // Also write QR to a text file for easy access
+  try {
+    const qrFile = path.join(__dirname, '..', 'session_qr.txt');
+    QRCode.toString(qrPayload, { type: 'utf8', small: true }, (err, qr) => {
+      if (err) return;
+      fs.writeFileSync(qrFile, `Session: ${code}\nServer: ${SERVER_URL}\nURL: ${qrPayload}\n\n${qr}\n`);
+    });
+  } catch {}
 }
 
 // ─── Agent execution ───────────────────────────────────────────
