@@ -17,6 +17,14 @@ const DEFAULTS = {
   kiroRegion: process.env.KIRO_REGION    || 'us-east-1',
 };
 
+const AGENT_MODELS = {
+  codex:    ['gpt-4o', 'gpt-4.1', 'gpt-5', 'gpt-5.5'],
+  opencode: ['gpt-4o', 'gpt-4.1', 'gpt-5', 'gpt-5.5', 'o3-mini', 'gpt-4.1-nano'],
+  windsurf: ['gpt-4o', 'gpt-4.1'],
+  kiro:     ['anthropic.claude-3-5-sonnet-20241022-v2:0', 'anthropic.claude-3-opus-20240229', 'anthropic.claude-3-haiku-20240307', 'anthropic.claude-3-5-haiku-20241022'],
+};
+const MODEL_KEY = { codex: 'CODEX_MODEL', opencode: 'OPENCODE_MODEL', windsurf: 'WINDSURF_MODEL', kiro: 'KIRO_MODEL' };
+
 const sessions = new Map();
 
 function loadSessions() {
@@ -134,10 +142,19 @@ wss.on('connection', (ws) => {
       s.phoneWs = ws;
       ws._code = code; ws._role = 'phone';
       if (s.reconnectTimer) { clearTimeout(s.reconnectTimer); s.reconnectTimer = null; }
-      send(ws, { type: 'session_joined', code, relay_online: s.relayWs?.readyState === 1, config: s.config || {} });
+      send(ws, { type: 'session_joined', code, relay_online: s.relayWs?.readyState === 1, config: s.config || {}, available_models: AGENT_MODELS });
       if (s.relayWs?.readyState === 1) send(s.relayWs, { type: 'phone_connected' });
       saveSessions();
       console.log(`[phone] ${code} joined`);
+      return;
+    }
+
+    if (msg.type === 'select_model') {
+      const s = ws._code ? sessions.get(ws._code) : null;
+      if (!s) { send(ws, { type: 'error', content: 'No session' }); return; }
+      const key = MODEL_KEY[msg.agent];
+      if (key) { s.config[key] = msg.model; saveSessions(); }
+      send(ws, { type: 'config_updated', config: s.config });
       return;
     }
 

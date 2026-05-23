@@ -81,7 +81,10 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     var webSocket by remember { mutableStateOf<WebSocket?>(null) }
     var showSettings by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
     var relayOnline by remember { mutableStateOf(false) }
+    var agentModels by remember { mutableStateOf(mapOf<String, List<String>>()) }
+    var currentModels by remember { mutableStateOf(mapOf<String, String>()) }
 
     var sessionCode by remember { mutableStateOf(prefs.getString("SESSION_CODE", "") ?: "") }
     var serverUrl by remember { mutableStateOf(prefs.getString("SERVER_URL", "wss://agent-hub-backend-wk48.onrender.com") ?: "") }
@@ -115,8 +118,37 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                     when (json.optString("type")) {
                         "session_joined" -> {
                             relayOnline = json.optBoolean("relay_online", false)
+                            val models = json.optJSONObject("available_models")
+                            if (models != null) {
+                                val m = mutableMapOf<String, List<String>>()
+                                for (key in models.keys()) {
+                                    val arr = models.optJSONArray(key)
+                                    if (arr != null) m[key] = (0 until arr.length()).map { arr.getString(it) }
+                                }
+                                agentModels = m
+                            }
+                            val cfg = json.optJSONObject("config")
+                            if (cfg != null) {
+                                val m = mutableMapOf<String, String>()
+                                for (agent in agents) {
+                                    val key = agent.id.uppercase() + "_MODEL"
+                                    if (cfg.has(key)) m[agent.id] = cfg.getString(key)
+                                }
+                                currentModels = m
+                            }
                             logs = logs + LogLine(System.currentTimeMillis(), "system",
                                 if (relayOnline) "Connected to relay session" else "Cloud mode (laptop offline)")
+                        }
+                        "config_updated" -> {
+                            val cfg = json.optJSONObject("config")
+                            if (cfg != null) {
+                                val m = mutableMapOf<String, String>()
+                                for (agent in agents) {
+                                    val key = agent.id.uppercase() + "_MODEL"
+                                    if (cfg.has(key)) m[agent.id] = cfg.getString(key)
+                                }
+                                currentModels = m
+                            }
                         }
                         "stream" -> logs = logs + LogLine(System.currentTimeMillis(), activeAgent.id, json.optString("content"))
                         "replace_stream" -> logs = logs + LogLine(System.currentTimeMillis(), activeAgent.id, json.optString("content"), "replace")
@@ -240,6 +272,36 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         )
     }
 
+    // ─── Model Picker Dialog ────────────────────────────────────
+    if (showModelPicker && agentModels.containsKey(activeAgent.id)) {
+        AlertDialog(
+            onDismissRequest = { showModelPicker = false },
+            title = { Text("Model — ${activeAgent.name}", color = Color.White, fontWeight = FontWeight.Bold) },
+            containerColor = Color(0xFF1A1A2E),
+            text = {
+                Column {
+                    agentModels[activeAgent.id]?.forEach { model ->
+                        val isCurrent = model == currentModels[activeAgent.id]
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                val j = JSONObject(); j.put("type", "select_model")
+                                j.put("agent", activeAgent.id); j.put("model", model)
+                                webSocket?.send(j.toString()); showModelPicker = false
+                            }.padding(vertical = 10.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = isCurrent, onClick = { /* same */ },
+                                colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF8B5CF6)))
+                            Spacer(Modifier.width(8.dp))
+                            Text(model, color = if (isCurrent) Color.White else Color(0xFFBBBBBB), fontSize = 13.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showModelPicker = false }) { Text("Cancel", color = Color.Gray) } }
+        )
+    }
+
     // ─── Main UI ─────────────────────────────────────────────────
     Column(modifier = Modifier.fillMaxSize().padding(top = 40.dp, bottom = 8.dp, start = 12.dp, end = 12.dp)) {
         // Header
@@ -293,7 +355,23 @@ fun AgentHubScreen(initialDeepLink: String = "") {
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        // Model selector
+        if (isConnected) {
+            Row(modifier = Modifier.fillMaxWidth().clickable { showModelPicker = true }.padding(horizontal = 4.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Model:", color = Color(0xFF888888), fontSize = 11.sp)
+                Spacer(Modifier.width(6.dp))
+                val cur = currentModels[activeAgent.id]
+                if (cur != null) {
+                    Text(cur, color = Color(0xFF8B5CF6), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(" ▾", color = Color(0xFF666666), fontSize = 10.sp)
+                } else {
+                    Text("default", color = Color(0xFF666666), fontSize = 13.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
 
         // Terminal / Chat area
         Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(16.dp))
