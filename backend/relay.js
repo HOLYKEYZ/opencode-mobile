@@ -13,14 +13,14 @@ const isWin = os.platform() === 'win32';
 
 const AGENTS = [
   { id: 'codex',    name: 'Codex',    modelKey: 'CODEX_MODEL',    cmd: process.env.CODEX_PATH || 'codex', args: p => ['exec', '--dangerously-bypass-approvals-and-sandbox', p], localPromptCli: true },
-  { id: 'opencode', name: 'OpenCode', modelKey: 'OPENCODE_MODEL', cmd: null,                         args: p => ['run', '--dangerously-skip-permissions', '--format', 'json', p], localPromptCli: true },
+  { id: 'opencode', name: 'OpenCode', modelKey: 'OPENCODE_MODEL', cmd: null,                         args: p => ['run', '--dangerously-skip-permissions', '--format', 'json', p], localPromptCli: false },
   { id: 'windsurf', name: 'Windsurf', modelKey: 'WINDSURF_MODEL', cmd: null,                         args: p => [p], localPromptCli: false },
   { id: 'kiro',     name: 'Kiro',     modelKey: 'KIRO_MODEL',     cmd: null,                         args: p => [p], localPromptCli: false },
 ];
 
 const PTY_AGENT_ARGS = {
   codex: (prompt) => ['--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen', prompt],
-  opencode: (prompt) => ['run', '--dangerously-skip-permissions', prompt],
+  opencode: (prompt) => ['--prompt', prompt],
   windsurf: (prompt) => [prompt],
   kiro: (prompt) => [prompt],
 };

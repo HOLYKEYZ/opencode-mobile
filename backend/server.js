@@ -63,6 +63,15 @@ function getRelayOnline(session) {
   return session?.relayWs?.readyState === 1;
 }
 
+function getLocalAgents(session) {
+  return Array.isArray(session?.config?.LOCAL_AGENTS) ? session.config.LOCAL_AGENTS : [];
+}
+
+function getAvailableModels(session) {
+  const localAgents = new Set(getLocalAgents(session));
+  return Object.fromEntries(Object.entries(AGENT_MODELS).filter(([agent]) => localAgents.has(agent)));
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === '/health') {
@@ -80,7 +89,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       code: s.code, state: s.state, createdAt: s.createdAt,
       relayOnline: s.relayWs?.readyState === 1,
-      agents: s.config?.LOCAL_AGENTS || [],
+      agents: getLocalAgents(s),
     }));
     return;
   }
@@ -162,7 +171,7 @@ wss.on('connection', (ws) => {
       if (s.reconnectTimer) { clearTimeout(s.reconnectTimer); s.reconnectTimer = null; }
       const agentModel = {};
       for (const [a, key] of Object.entries(MODEL_KEY)) { if (s.config?.[key]) agentModel[a] = s.config[key]; }
-      send(ws, { type: 'session_joined', code, relay_online: getRelayOnline(s), available_models: AGENT_MODELS, agent_model: agentModel });
+      send(ws, { type: 'session_joined', code, relay_online: getRelayOnline(s), available_models: getAvailableModels(s), available_agents: getLocalAgents(s), agent_model: agentModel });
       if (getRelayOnline(s)) send(s.relayWs, { type: 'phone_connected' });
       saveSessions();
       console.log(`[phone] ${code} joined`);
