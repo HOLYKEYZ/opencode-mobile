@@ -323,7 +323,10 @@ function executePtyAgent(agent, prompt, clientId) {
   if (session.output) {
     send({ type: 'stream', clientId, content: session.output.slice(-12000) });
   }
-  session.terminal.write(`${prompt}\r`);
+  session.terminal.write(prompt);
+  setTimeout(() => {
+    try { session.terminal.write('\r'); } catch {}
+  }, 100);
 }
 
 function executeAgent(agent, prompt, clientId) {
