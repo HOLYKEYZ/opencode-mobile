@@ -1,0 +1,8 @@
+Agent: Codex (codex)
+Code: DPsk8aYyrJ
+URL: wss://agent-hub-backend-wk48.onrender.com?code=DPsk8aYyrJ&agent=codex
+
+Agent: OpenCode (opencode)
+Code: DPsk8aYyrJ
+URL: wss://agent-hub-backend-wk48.onrender.com?code=DPsk8aYyrJ&agent=opencode
+
