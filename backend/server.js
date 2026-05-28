@@ -21,6 +21,10 @@ const MODEL_KEY = { codex: 'CODEX_MODEL', opencode: 'OPENCODE_MODEL' };
 
 const sessions = new Map();
 
+function isValidCode(code) {
+  return typeof code === 'string' && /^[A-Za-z0-9_-]{6,80}$/.test(code);
+}
+
 function ensurePhoneSockets(session) {
   if (!session.phoneWss) session.phoneWss = new Set();
   return session.phoneWss;
@@ -161,13 +165,32 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'register_relay') {
-      const code = generateCode();
-      const session = { code, relayWs: ws, phoneWs: null, config: msg.config || {}, createdAt: Date.now(), state: 'active', reconnectTimer: null };
+      const preferredCode = isValidCode(msg.preferredCode) ? msg.preferredCode : null;
+      const code = preferredCode || generateCode();
+      const existing = sessions.get(code);
+      if (existing?.relayWs && existing.relayWs !== ws) {
+        try { existing.relayWs.close(1000, 'Relay replaced by reconnect'); } catch {}
+      }
+      const session = existing || { code, relayWs: null, phoneWs: null, phoneWss: new Set(), config: {}, createdAt: Date.now(), state: 'active', reconnectTimer: null };
+      session.relayWs = ws;
+      session.config = { ...(session.config || {}), ...(msg.config || {}) };
+      session.state = 'active';
       sessions.set(code, session);
       ws._code = code; ws._role = 'relay';
-      send(ws, { type: 'relay_registered', code });
+      send(ws, { type: 'relay_registered', code, reused: !!existing });
+      sendToPhones(session, { type: 'status', content: 'Desktop relay online.' });
+      const agentModel = {};
+      for (const [a, key] of Object.entries(MODEL_KEY)) { if (session.config?.[key]) agentModel[a] = session.config[key]; }
+      sendToPhones(session, {
+        type: 'session_joined',
+        code,
+        relay_online: true,
+        available_models: getAvailableModels(session),
+        available_agents: getLocalAgents(session),
+        agent_model: agentModel,
+      });
       saveSessions();
-      console.log(`[relay] ${code} registered`);
+      console.log(`[relay] ${code} ${existing ? 'reconnected' : 'registered'}`);
       return;
     }
 
@@ -235,7 +258,7 @@ wss.on('connection', (ws) => {
 
     // Phone → Relay
     if (ws._role === 'phone' && getRelayOnline(s)) {
-      send(s.relayWs, { type: 'execute', agent, prompt, sessionId: msg.sessionId || '', clientId: s.code });
+      send(s.relayWs, { type: 'execute', agent, prompt, sessionId: msg.sessionId || '', attachments: msg.attachments || [], clientId: s.code });
       return;
     }
 

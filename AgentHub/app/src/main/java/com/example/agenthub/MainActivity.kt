@@ -8,7 +8,9 @@ import android.app.Activity
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.speech.RecognizerIntent
+import android.util.Base64
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -40,6 +42,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -57,8 +60,44 @@ import java.util.concurrent.TimeUnit
 data class AgentInfo(val id: String, val name: String)
 data class LogLine(val id: Long, val text: String, val type: String = "append")
 data class RemoteSession(val agent: String, val id: String, val title: String, val subtitle: String, val updatedAt: Long = 0)
+data class PendingAttachment(val name: String, val mime: String, val base64: String, val size: Int)
 
 val AGENT_NAMES = mapOf("codex" to "Codex", "opencode" to "OpenCode", "system" to "system")
+
+fun parseRemoteSessions(raw: String): List<RemoteSession> {
+    if (raw.isBlank()) return emptyList()
+    return try {
+        val arr = JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = obj.optString("id")
+            if (id.isBlank()) return@mapNotNull null
+            RemoteSession(
+                agent = obj.optString("agent"),
+                id = id,
+                title = obj.optString("title", id),
+                subtitle = obj.optString("subtitle", obj.optString("directory", "")),
+                updatedAt = obj.optLong("updatedAt", 0)
+            )
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+fun remoteSessionsToJson(sessions: List<RemoteSession>): String {
+    val arr = JSONArray()
+    sessions.forEach { session ->
+        arr.put(JSONObject().apply {
+            put("agent", session.agent)
+            put("id", session.id)
+            put("title", session.title)
+            put("subtitle", session.subtitle)
+            put("updatedAt", session.updatedAt)
+        })
+    }
+    return arr.toString()
+}
 
 class MainActivity : ComponentActivity() {
     private val deepLinkState = mutableStateOf("")
@@ -143,7 +182,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     var relayOnline by remember { mutableStateOf(false) }
     var currentAgent by remember { mutableStateOf(prefs.getString("CURRENT_AGENT", "") ?: "") }
     var availableAgents by remember { mutableStateOf(listOf<String>()) }
-    var sessions by remember { mutableStateOf(listOf<RemoteSession>()) }
+    var sessions by remember { mutableStateOf(parseRemoteSessions(prefs.getString("LAST_SESSIONS", "") ?: "")) }
     var sessionsLoading by remember { mutableStateOf(false) }
     var sessionsNotice by remember { mutableStateOf("") }
     var selectedSessionId by remember { mutableStateOf(prefs.getString("SELECTED_SESSION_ID", "") ?: "") }
@@ -152,6 +191,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     var currentModel by remember { mutableStateOf("") }
     var connectionSeq by remember { mutableStateOf(0L) }
     var hasPausedOnce by remember { mutableStateOf(false) }
+    var attachments by remember { mutableStateOf(listOf<PendingAttachment>()) }
 
     var sessionCode by remember { mutableStateOf(prefs.getString("SESSION_CODE", "") ?: "") }
     var serverUrl by remember { mutableStateOf(prefs.getString("SERVER_URL", "wss://agent-hub-backend-wk48.onrender.com") ?: "") }
@@ -162,6 +202,42 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         if (result.resultCode == Activity.RESULT_OK) {
             val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
             if (spoken.isNotBlank()) input = listOf(input, spoken).filter { it.isNotBlank() }.joinToString(" ")
+        }
+    }
+
+    fun displayNameForUri(uri: android.net.Uri): String {
+        return try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+            } ?: uri.lastPathSegment ?: "upload"
+        } catch (_: Exception) {
+            uri.lastPathSegment ?: "upload"
+        }
+    }
+
+    val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        val added = mutableListOf<PendingAttachment>()
+        for (uri in uris.take(10)) {
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: continue
+                if (bytes.size > 8 * 1024 * 1024) {
+                    logs = logs + LogLine(System.currentTimeMillis(), "Error: ${displayNameForUri(uri)} is over 8 MB")
+                    continue
+                }
+                added += PendingAttachment(
+                    name = displayNameForUri(uri),
+                    mime = context.contentResolver.getType(uri) ?: "application/octet-stream",
+                    base64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
+                    size = bytes.size
+                )
+            } catch (e: Exception) {
+                logs = logs + LogLine(System.currentTimeMillis(), "Error: Could not attach ${uri.lastPathSegment ?: "file"} (${e.message})")
+            }
+        }
+        if (added.isNotEmpty()) {
+            attachments = (attachments + added).takeLast(10)
+            logs = logs + LogLine(System.currentTimeMillis(), "Attached ${added.size} file(s) from phone", "file")
         }
     }
 
@@ -234,7 +310,59 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     }
 
     fun visibleTranscript(): String {
-        return consolidatedLogs().map { it.text }.filter { it.isNotBlank() }.joinToString("\n\n").takeLast(60000)
+        return consolidatedLogs().map { it.text }.filter { it.isNotBlank() }.joinToString("\n\n").takeLast(200000)
+    }
+
+    fun statusLogType(text: String): String {
+        val value = text.trim()
+        return when {
+            value.startsWith("command:") || value.startsWith("tool:") || value.startsWith("web_search") ||
+                value.startsWith("tool_search") || value.startsWith("mcp_") || value.startsWith("patch_") ||
+                value.startsWith("thinking") || value.startsWith("browser/search") ||
+                value.startsWith("command output:") -> "tool"
+            value.startsWith("file:") || value.startsWith("files:") || value.startsWith("file diff:") -> "file"
+            else -> "status"
+        }
+    }
+
+    fun detailExtraLogs(detail: JSONObject?, startId: Long): List<LogLine> {
+        if (detail == null) return emptyList()
+        val out = mutableListOf<LogLine>()
+        var next = startId
+        val commands = detail.optJSONArray("commands")
+        if (commands != null) {
+            for (i in 0 until commands.length()) {
+                val obj = commands.optJSONObject(i) ?: continue
+                val command = obj.optString("command").ifBlank { obj.optString("name") }
+                if (command.isNotBlank()) out += LogLine(next++, "command: $command", "tool")
+            }
+        }
+        val tools = detail.optJSONArray("tools")
+        if (tools != null) {
+            for (i in 0 until tools.length()) {
+                val obj = tools.optJSONObject(i) ?: continue
+                val name = obj.optString("name", "tool")
+                val args = obj.optString("arguments")
+                out += LogLine(next++, if (args.isBlank()) "tool: $name" else "tool: $name\n$args", "tool")
+            }
+        }
+        val files = detail.optJSONArray("files")
+        if (files != null && files.length() > 0) {
+            val allFiles = (0 until files.length()).mapNotNull { i -> files.optString(i).takeIf { it.isNotBlank() } }
+            val shown = allFiles.take(30).joinToString("\n") { "file: $it" }
+            val hidden = allFiles.size - 30
+            val text = if (hidden > 0) "$shown\nfile: ... $hidden more" else shown
+            if (text.isNotBlank()) out += LogLine(next++, text, "file")
+        }
+        val diff = detail.optJSONArray("diff")
+        if (diff != null && diff.length() > 0) {
+            out += LogLine(next++, "files changed: ${diff.length()} diff item(s)", "file")
+        }
+        val todo = detail.optJSONArray("todo")
+        if (todo != null && todo.length() > 0) {
+            out += LogLine(next++, "todo: ${todo.length()} item(s)", "tool")
+        }
+        return out
     }
 
     fun copyVisibleTranscript() {
@@ -349,6 +477,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 sessions = parseSessions(json.optJSONArray("sessions") ?: JSONArray())
                                 sessionsLoading = false
                                 sessionsNotice = if (sessions.isEmpty()) "No saved Codex/OpenCode chats found." else ""
+                                prefs.edit().putString("LAST_SESSIONS", remoteSessionsToJson(sessions.take(200))).apply()
                                 sessions.firstOrNull { it.id == selectedSessionId }?.let {
                                     selectedSessionTitle = it.title
                                     prefs.edit().putString("SELECTED_SESSION_TITLE", it.title).apply()
@@ -357,7 +486,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                             "session_detail" -> {
                                 val detail = json.optJSONObject("detail")
                                 val messages = detail?.optJSONArray("messages")
-                                if (messages != null) {
+                                val chatLogs = if (messages != null) {
                                     val chatLogs = (0 until messages.length()).mapNotNull { i ->
                                         val m = messages.optJSONObject(i)
                                         val role = m?.optString("role") ?: "message"
@@ -366,8 +495,10 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                             LogLine(System.currentTimeMillis() + i, text, role)
                                         } else null
                                     }
-                                    if (chatLogs.isNotEmpty()) logs = chatLogs
-                                }
+                                    chatLogs
+                                } else emptyList()
+                                val extras = detailExtraLogs(detail, System.currentTimeMillis() + 10000)
+                                if (chatLogs.isNotEmpty() || extras.isNotEmpty()) logs = chatLogs + extras
                             }
                             "config_updated" -> {
                                 val cfg = json.optJSONObject("config")
@@ -377,8 +508,11 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 }
                             }
                             "stream" -> logs = logs + LogLine(System.currentTimeMillis(), compactChatText(json.optString("content")), "assistant")
-                            "replace_stream" -> logs = logs + LogLine(System.currentTimeMillis(), compactChatText(json.optString("content")), "assistant")
-                            "status", "system" -> logs = logs + LogLine(System.currentTimeMillis(), json.optString("content"), "status")
+                            "replace_stream" -> logs = logs + LogLine(System.currentTimeMillis(), compactChatText(json.optString("content")), "replace")
+                            "status", "system" -> {
+                                val content = json.optString("content")
+                                logs = logs + LogLine(System.currentTimeMillis(), content, statusLogType(content))
+                            }
                             "done" -> { val c = json.optString("content"); if (c.isNotBlank()) logs = logs + LogLine(System.currentTimeMillis(), c) }
                             "error" -> logs = logs + LogLine(System.currentTimeMillis(), "Error: ${json.optString("content")}")
                         }
@@ -417,7 +551,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
 
     LaunchedEffect(logs) {
         val text = visibleTranscript()
-        prefs.edit().putString("LAST_TRANSCRIPT", text.takeLast(60000)).apply()
+        prefs.edit().putString("LAST_TRANSCRIPT", text.takeLast(200000)).apply()
         if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
     }
 
@@ -432,14 +566,27 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     }
 
     val sendMsg = {
-        if (input.isNotBlank() && wsStatus == "connected" && currentAgent.isNotBlank()) {
+        if ((input.isNotBlank() || attachments.isNotEmpty()) && wsStatus == "connected" && currentAgent.isNotBlank()) {
             if (currentAgent == "codex" && selectedSessionId.isBlank()) {
                 logs = logs + LogLine(System.currentTimeMillis(), "Pick a Codex chat first. This prevents starting a new terminal session by accident.")
             } else {
-            logs = logs + LogLine(System.currentTimeMillis(), input, "user")
-            val j = JSONObject(); j.put("agent", currentAgent); j.put("prompt", input)
+            val promptText = input.ifBlank { "Please inspect the attached file(s)." }
+            logs = logs + LogLine(System.currentTimeMillis(), promptText, "user")
+            val j = JSONObject(); j.put("agent", currentAgent); j.put("prompt", promptText)
             if (selectedSessionId.isNotBlank()) j.put("sessionId", selectedSessionId)
-            webSocket?.send(j.toString()); input = ""
+            if (attachments.isNotEmpty()) {
+                val arr = JSONArray()
+                attachments.forEach { file ->
+                    arr.put(JSONObject().apply {
+                        put("name", file.name)
+                        put("mime", file.mime)
+                        put("base64", file.base64)
+                        put("size", file.size)
+                    })
+                }
+                j.put("attachments", arr)
+            }
+            webSocket?.send(j.toString()); input = ""; attachments = emptyList()
             }
         }
     }
@@ -709,6 +856,8 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                         if (log.text.isNotBlank()) {
                             val isUser = log.type == "user"
                             val isStatus = log.type == "status" || log.text.startsWith("Error")
+                            val isTool = log.type == "tool"
+                            val isFile = log.type == "file"
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(
                                     start = if (isUser) 32.dp else 0.dp,
@@ -721,6 +870,8 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 Surface(
                                     color = when {
                                         isStatus -> Color.Transparent
+                                        isTool -> Color(0xFF111827)
+                                        isFile -> Color(0xFF10231B)
                                         isUser -> Color(0xFF3B2F79)
                                         else -> Color(0xFF15161A)
                                     },
@@ -731,10 +882,12 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                         color = when {
                                             log.text.startsWith("Error") -> Color(0xFFEF4444)
                                             isStatus -> Color(0xFF8F96A3)
+                                            isTool -> Color(0xFFA7F3D0)
+                                            isFile -> Color(0xFF86EFAC)
                                             else -> Color.White
                                         },
-                                        fontFamily = if (isStatus) FontFamily.Monospace else FontFamily.Default,
-                                        fontSize = if (isStatus) 11.sp else 13.sp,
+                                        fontFamily = if (isStatus || isTool || isFile) FontFamily.Monospace else FontFamily.Default,
+                                        fontSize = if (isStatus || isTool || isFile) 11.sp else 13.sp,
                                         modifier = Modifier.padding(horizontal = if (isStatus) 0.dp else 10.dp, vertical = if (isStatus) 2.dp else 8.dp)
                                     )
                                 }
@@ -748,15 +901,32 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         Spacer(Modifier.height(8.dp))
 
         // Input bar
+        if (attachments.isNotEmpty()) {
+            Text(
+                attachments.joinToString("  ") { "${it.name} (${it.size / 1024} KB)" },
+                color = Color(0xFF86EFAC),
+                fontSize = 10.sp,
+                maxLines = 1,
+                modifier = Modifier.padding(start = 58.dp, bottom = 4.dp)
+            )
+        }
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(
                 onClick = { startVoiceInput() },
                 enabled = canPrompt,
-                modifier = Modifier.size(48.dp).clip(CircleShape).background(Color(0xFF1E1E24))
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(Color(0xFF1E1E24))
             ) {
                 Icon(Icons.Default.Mic, contentDescription = "Voice prompt", tint = if (canPrompt) Color(0xFFA7F3D0) else Color(0xFF333333))
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
+            IconButton(
+                onClick = { fileLauncher.launch("*/*") },
+                enabled = canPrompt,
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(Color(0xFF1E1E24))
+            ) {
+                Icon(Icons.Default.AttachFile, contentDescription = "Attach file", tint = if (canPrompt) Color(0xFFB8A7FF) else Color(0xFF333333))
+            }
+            Spacer(Modifier.width(6.dp))
             TextField(
                 value = input, onValueChange = { input = it },
                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).height(48.dp),
@@ -773,7 +943,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                     else "Prompt $agentName...",
                     color = if (isConnected && currentAgent.isNotBlank()) Color.Gray else Color(0xFF333333)) }
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             Box(modifier = Modifier.size(48.dp).clip(CircleShape).background(
                 if (canPrompt) Color(0xFF8B5CF6) else Color(0xFF1E1E24))
                 .clickable(enabled = canPrompt) { sendMsg() },
