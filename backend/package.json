@@ -7,7 +7,6 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1053.0",
     "qrcode": "^1.5.4",
     "ws": "^8.16.0"
   },

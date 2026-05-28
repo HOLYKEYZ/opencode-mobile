@@ -12,10 +12,10 @@ const WORKSPACE_CWD = path.resolve(process.env.AGENTHUB_CWD || process.env.WORKS
 const isWin = os.platform() === 'win32';
 
 const AGENTS = [
-  { id: 'codex',    name: 'Codex',    configKey: 'CODEX_SESSION',  modelKey: 'CODEX_MODEL',  cmd: process.env.CODEX_PATH || 'codex',               args: p => ['exec', '--dangerously-bypass-approvals-and-sandbox', p] },
-  { id: 'opencode', name: 'OpenCode', configKey: 'OPENCODE_SESSION', modelKey: 'OPENCODE_MODEL', cmd: null, args: p => ['run', '--dangerously-skip-permissions', '--format', 'json', p] },
-  { id: 'windsurf', name: 'Windsurf', configKey: 'WINDSURF_SESSION', modelKey: 'WINDSURF_MODEL', cmd: null, args: p => [p] },
-  { id: 'kiro',     name: 'Kiro',     configKey: 'KIRO_SESSION',   modelKey: 'KIRO_MODEL',   cmd: null, args: p => [p] },
+  { id: 'codex',    name: 'Codex',    modelKey: 'CODEX_MODEL',    cmd: process.env.CODEX_PATH || 'codex', args: p => ['exec', '--dangerously-bypass-approvals-and-sandbox', p], localPromptCli: true },
+  { id: 'opencode', name: 'OpenCode', modelKey: 'OPENCODE_MODEL', cmd: null,                         args: p => ['run', '--dangerously-skip-permissions', '--format', 'json', p], localPromptCli: true },
+  { id: 'windsurf', name: 'Windsurf', modelKey: 'WINDSURF_MODEL', cmd: null,                         args: p => [p], localPromptCli: false },
+  { id: 'kiro',     name: 'Kiro',     modelKey: 'KIRO_MODEL',     cmd: null,                         args: p => [p], localPromptCli: false },
 ];
 
 const PTY_AGENT_ARGS = {
@@ -85,11 +85,25 @@ function getCmd(a) {
   return a.id;
 }
 
+function commandExists(command) {
+  if (!command) return false;
+  if (path.isAbsolute(command)) {
+    try { fs.accessSync(command); return true; } catch { return false; }
+  }
+  const pathExt = isWin ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';') : [''];
+  const names = isWin && !path.extname(command) ? pathExt.map(ext => command + ext.toLowerCase()).concat(pathExt.map(ext => command + ext)) : [command];
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    for (const name of names) {
+      try { fs.accessSync(path.join(dir, name)); return true; } catch {}
+    }
+  }
+  return false;
+}
+
 function readCodexConfig() {
   try {
     const authPath = path.join(os.homedir(), '.codex', 'auth.json');
     if (!fs.existsSync(authPath)) return {};
-    const auth = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
     const cfg = {};
     const configPath = path.join(os.homedir(), '.codex', 'config.toml');
     if (fs.existsSync(configPath)) {
@@ -97,9 +111,6 @@ function readCodexConfig() {
       const model = raw.match(/model\s*=\s*"([^"]+)"/)?.[1];
       if (model) cfg.CODEX_MODEL = model;
     }
-    const token = auth.tokens?.access_token;
-    if (token) cfg.CODEX_SESSION = token;
-    if (auth.OPENAI_API_KEY) cfg.CODEX_SESSION = auth.OPENAI_API_KEY;
     return cfg;
   } catch { return {}; }
 }
@@ -108,15 +119,8 @@ function readOpenCodeConfig() {
   try {
     const authPath = path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json');
     if (!fs.existsSync(authPath)) return {};
-    const auth = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
-    const cfg = {};
-    for (const [provider, creds] of Object.entries(auth)) {
-      const key = creds.key || creds.api_key || creds.apiKey || creds.token;
-      if (key) {
-        if (!cfg.OPENCODE_SESSION) cfg.OPENCODE_SESSION = String(key);
-      }
-    }
-    return cfg;
+    JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+    return {};
   } catch { return {}; }
 }
 
@@ -124,10 +128,8 @@ function readWindsurfConfig() {
   try {
     const configPath = path.join(os.homedir(), '.codeium', 'windsurf.json');
     if (!fs.existsSync(configPath)) return {};
-    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const cfg = {};
-    if (raw.api_key) cfg.WINDSURF_SESSION = raw.api_key;
-    return cfg;
+    JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    return {};
   } catch { return {}; }
 }
 
@@ -137,23 +139,28 @@ function readKiroConfig() {
     if (!fs.existsSync(configPath)) return {};
     const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     const cfg = {};
-    if (raw.access_key_id && raw.secret_access_key) {
-      cfg.KIRO_SESSION = JSON.stringify({ accessKeyId: raw.access_key_id, secretAccessKey: raw.secret_access_key, region: raw.region || 'us-east-1' });
-    }
     if (raw.model) cfg.KIRO_MODEL = raw.model;
     return cfg;
   } catch { return {}; }
 }
 
 function readLocalConfig() {
-  return { ...readCodexConfig(), ...readOpenCodeConfig(), ...readWindsurfConfig(), ...readKiroConfig() };
+  const cfg = { ...readCodexConfig(), ...readOpenCodeConfig(), ...readWindsurfConfig(), ...readKiroConfig() };
+  cfg.LOCAL_AGENTS = getAvailableAgents().map(a => a.id);
+  return cfg;
 }
 
 // ─── Detect available agents ──────────────────────────────────
 
 function getAvailableAgents() {
-  const cfg = readLocalConfig();
-  return AGENTS.filter(a => cfg[a.configKey]);
+  return AGENTS.filter((a) => {
+    if (!a.localPromptCli) return false;
+    const cmd = getCmd(a);
+    if (!commandExists(cmd)) return false;
+    if (a.id === 'codex') return fs.existsSync(path.join(os.homedir(), '.codex', 'auth.json'));
+    if (a.id === 'opencode') return fs.existsSync(path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'));
+    return false;
+  });
 }
 
 // ─── WebSocket ────────────────────────────────────────────────
@@ -259,8 +266,10 @@ function startPtyAgent(agent, prompt, clientId) {
   if (!pty) throw new Error('node-pty is not installed. Run npm install in backend/.');
   const a = AGENTS.find(x => x.id === agent);
   if (!a) throw new Error(`Unknown agent: ${agent}`);
+  if (!a.localPromptCli) throw new Error(`${a.name} is installed as an editor launcher, not a promptable local agent CLI.`);
 
   const cmd = getCmd(a);
+  if (!commandExists(cmd)) throw new Error(`${a.name} CLI not found on PATH.`);
   const args = (PTY_AGENT_ARGS[agent] || ((p) => a.args(p)))(prompt);
   const launch = buildPtyAgentLaunch(agent, cmd, args);
   const id = sessionKey(agent);
@@ -333,6 +342,7 @@ function executeAgent(agent, prompt, clientId) {
   return new Promise((resolve) => {
     const a = AGENTS.find(x => x.id === agent);
     if (!a) { send({ type: 'error', clientId, content: `Unknown agent: ${agent}` }); resolve(); return; }
+    if (!a.localPromptCli) { send({ type: 'error', clientId, content: `${a.name} is installed as an editor launcher, not a promptable local agent CLI.` }); resolve(); return; }
 
     if (process.env.AGENTHUB_ONE_SHOT !== '1') {
       try {

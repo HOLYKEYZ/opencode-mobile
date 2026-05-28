@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
-const { BedrockRuntimeClient, ConverseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
 
 const PORT = process.env.PORT || 3001;
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
@@ -64,16 +63,6 @@ function getRelayOnline(session) {
   return session?.relayWs?.readyState === 1;
 }
 
-function extractSseText(event) {
-  return event.choices?.[0]?.delta?.content
-    || event.choices?.[0]?.text
-    || event.delta
-    || event.output_text
-    || event.message?.content?.parts?.[0]
-    || event.response?.output_text
-    || '';
-}
-
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === '/health') {
@@ -91,7 +80,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       code: s.code, state: s.state, createdAt: s.createdAt,
       relayOnline: s.relayWs?.readyState === 1,
-      agents: Object.keys(s.config || {}).filter(k => k.endsWith('_SESSION')).map(k => k.replace('_SESSION', '').toLowerCase()),
+      agents: s.config?.LOCAL_AGENTS || [],
     }));
     return;
   }
@@ -227,19 +216,9 @@ wss.on('connection', (ws) => {
       return;
     }
 
-    // Phone → Cloud (relay offline)
+    // Phone without relay: local agents only, no server-side API fallback.
     if (ws._role === 'phone' && !getRelayOnline(s)) {
-      send(ws, { type: 'status', content: '⚡ Relay offline — using cloud mode directly' });
-      try {
-        const cfg = s.config || {};
-        switch (agent.toLowerCase()) {
-          case 'codex':    await runCodexCloud(ws, cfg, prompt); break;
-          case 'opencode': await runOpenCodeCloud(ws, cfg, prompt); break;
-          case 'windsurf': await runWindsurfCloud(ws, cfg, prompt); break;
-          case 'kiro':     await runKiroCloud(ws, cfg, prompt); break;
-          default: send(ws, { type: 'error', content: `Unknown agent: ${agent}` });
-        }
-      } catch (e) { send(ws, { type: 'error', content: `Error: ${e.message}` }); }
+      send(ws, { type: 'error', content: 'Desktop relay offline. Wake the laptop and restart the relay.' });
       return;
     }
   });
@@ -249,142 +228,13 @@ wss.on('connection', (ws) => {
     if (!s) return;
     if (ws._role === 'relay') {
       s.relayWs = null;
-      send(s.phoneWs, { type: 'status', content: '⚡ Desktop relay offline. Using cloud mode.' });
+      send(s.phoneWs, { type: 'status', content: 'Desktop relay offline. Local agents unavailable.' });
       saveSessions();
     } else if (ws._role === 'phone') {
       s.phoneWs = null;
     }
   });
 });
-
-// ─── Cloud handlers ──────────────────────────────────────────────
-
-async function streamSSE(response, ws) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() || '';
-    for (const line of lines) {
-      if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-        try {
-          const d = JSON.parse(line.slice(6));
-          const content = extractSseText(d);
-          if (content) send(ws, { type: 'stream', content });
-        } catch (e) {}
-      }
-    }
-  }
-}
-
-async function runCodexCloud(ws, cfg, prompt) {
-  const m = cfg.CODEX_MODEL || DEFAULTS.codex;
-  // Try each possible API key in order: OpenCode OpenAI key, then Codex JWT
-  const keys = [];
-  if (cfg.OPENCODE_SESSION) keys.push(cfg.OPENCODE_SESSION);
-  if (cfg.CODEX_SESSION) keys.push(cfg.CODEX_SESSION);
-  if (cfg.OPENCODE_PROVIDERS) {
-    try {
-      const p = typeof cfg.OPENCODE_PROVIDERS === 'string' ? JSON.parse(cfg.OPENCODE_PROVIDERS) : cfg.OPENCODE_PROVIDERS;
-      for (const k of Object.values(p)) { if (String(k).startsWith('sk-')) keys.push(String(k)); }
-    } catch {}
-  }
-  if (!keys.length) return send(ws, { type: 'error', content: 'No API keys available for cloud mode. Connect desktop relay to use local agents.' });
-  send(ws, { type: 'status', content: `🤖 Codex (${m}) via cloud...` });
-  for (const key of keys) {
-    const body = { model: m, messages: [{ role: 'user', content: prompt }], stream: true };
-    let resp = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST', headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      resp = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST', headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m, input: prompt, stream: true }),
-      });
-    }
-    if (resp.ok) { await streamSSE(resp, ws); send(ws, { type: 'done', content: `\n✅ Codex (${m}) complete.` }); return; }
-  }
-  send(ws, { type: 'error', content: 'All API keys failed for Codex. Connect desktop relay to use local agents.' });
-}
-
-async function runOpenCodeCloud(ws, cfg, prompt) {
-  const session = cfg.OPENCODE_SESSION;
-  if (!session) return send(ws, { type: 'error', content: 'OpenCode session not set. Connect relay or configure in settings.' });
-  const userModel = cfg.OPENCODE_MODEL;
-  let apiUrl, model;
-  if (session.startsWith('sk-or-')) { apiUrl = 'https://openrouter.ai/api/v1/chat/completions'; model = userModel || 'openai/gpt-4o'; }
-  else if (session.startsWith('gsk_')) { apiUrl = 'https://api.groq.com/openai/v1/chat/completions'; model = userModel || 'llama-3.3-70b-versatile'; }
-  else if (session.startsWith('nvapi-')) { apiUrl = 'https://integrate.api.nvidia.com/v1/chat/completions'; model = userModel || 'meta/llama-3.1-70b-instruct'; }
-  else if (session.startsWith('AIza')) {
-    send(ws, { type: 'status', content: '🤖 OpenCode (Google AI)...' });
-    const mid = userModel || 'gemini-pro';
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1/models/${mid}:streamGenerateContent?key=${session}&alt=sse`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-    });
-    if (!resp.ok) { send(ws, { type: 'error', content: `Google AI error: ${resp.status}` }); return; }
-    const reader = resp.body.getReader(), decoder = new TextDecoder(); let buf = '';
-    while (true) {
-      const { done, value } = await reader.read(); if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      for (const line of buf.split('\n').slice(0, -1)) {
-        if (line.startsWith('data: ')) { try { const d = JSON.parse(line.slice(6)); const t = d.candidates?.[0]?.content?.parts?.[0]?.text || ''; if (t) send(ws, { type: 'stream', content: t }); } catch (e) {} }
-      }
-      buf = buf.split('\n').pop() || '';
-    }
-    send(ws, { type: 'done', content: '\n✅ OpenCode complete.' }); return;
-  } else {
-    apiUrl = 'https://api.openai.com/v1/chat/completions'; model = userModel || DEFAULTS.opencode;
-  }
-  send(ws, { type: 'status', content: `🤖 OpenCode (${model})...` });
-  const resp = await fetch(apiUrl, {
-    method: 'POST', headers: { 'Authorization': `Bearer ${session}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: true }),
-  });
-  if (!resp.ok) { const t = await resp.text().catch(() => ''); send(ws, { type: 'error', content: `OpenCode error ${resp.status}: ${t}` }); return; }
-  await streamSSE(resp, ws);
-  send(ws, { type: 'done', content: `\n✅ OpenCode (${model}) complete.` });
-}
-
-async function runWindsurfCloud(ws, cfg, prompt) {
-  const session = cfg.WINDSURF_SESSION;
-  if (!session) return send(ws, { type: 'error', content: 'Windsurf session not set. Connect relay or configure in settings.' });
-  send(ws, { type: 'status', content: '🏄 Windsurf...' });
-  const body = { messages: [{ role: 'user', content: prompt }] };
-  if (cfg.WINDSURF_MODEL) body.model = cfg.WINDSURF_MODEL;
-  try {
-    const resp = await fetch('https://server.codeium.com/api/v1/chat/completions', {
-      method: 'POST', headers: { 'Authorization': `Bearer ${session}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    if (!resp.ok) { send(ws, { type: 'stream', content: `[Windsurf] API ${resp.status}. Use relay mode.\n\nPrompt: ${prompt}` }); send(ws, { type: 'done', content: '\n⚠️ Connect desktop relay for full Windsurf access.' }); return; }
-    await streamSSE(resp, ws);
-    send(ws, { type: 'done', content: '\n✅ Windsurf complete.' });
-  } catch (err) { send(ws, { type: 'error', content: `Windsurf error: ${err.message}` }); }
-}
-
-function parseAwsCreds(s) {
-  try { const p = JSON.parse(s); return { accessKeyId: p.accessKeyId || p.access_key_id, secretAccessKey: p.secretAccessKey || p.secret_access_key, region: p.region || DEFAULTS.kiroRegion }; }
-  catch { const p = s.split(':'); return { accessKeyId: p[0], secretAccessKey: p[1], region: p[2] || DEFAULTS.kiroRegion }; }
-}
-
-async function runKiroCloud(ws, cfg, prompt) {
-  const session = cfg.KIRO_SESSION;
-  if (!session) return send(ws, { type: 'error', content: 'Kiro session not set. Connect relay or configure in settings.' });
-  const { accessKeyId, secretAccessKey, region } = parseAwsCreds(session);
-  if (!accessKeyId || !secretAccessKey) return send(ws, { type: 'error', content: 'Kiro session must be JSON {"accessKeyId":"...","secretAccessKey":"...","region":"..."} or key:secret:region' });
-  const modelId = cfg.KIRO_MODEL || DEFAULTS.kiro;
-  send(ws, { type: 'status', content: `🔮 Kiro (${modelId})...` });
-  try {
-    const client = new BedrockRuntimeClient({ region, credentials: { accessKeyId, secretAccessKey } });
-    const resp = await client.send(new ConverseStreamCommand({ modelId, messages: [{ role: 'user', content: [{ text: prompt }] }] }));
-    for await (const event of resp.stream) {
-      if (event.contentBlockDelta?.delta?.text) send(ws, { type: 'stream', content: event.contentBlockDelta.delta.text });
-      else if (event.messageStop) { send(ws, { type: 'done', content: '\n✅ Kiro complete.' }); return; }
-    }
-    send(ws, { type: 'done', content: '\n✅ Kiro complete.' });
-  } catch (err) { send(ws, { type: 'error', content: `Kiro error: ${err.message}` }); }
-}
 
 loadSessions();
 

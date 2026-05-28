@@ -142,7 +142,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 relayOnline = json.optBoolean("relay_online", false)
                                 if (currentAgent.isNotBlank()) {
                                     logs = logs + LogLine(System.currentTimeMillis(),
-                                        if (relayOnline) "$agentName ready (relay)" else "$agentName ready (cloud)")
+                                        if (relayOnline) "$agentName ready (relay)" else "$agentName waiting for desktop relay")
                                     val m = json.optJSONObject("agent_model")
                                     if (m != null && m.has(currentAgent)) currentModel = m.getString(currentAgent)
                                     val models = json.optJSONObject("available_models")
@@ -320,7 +320,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                 if (currentAgent.isNotBlank()) {
                     Text(agentName, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     if (isConnected) {
-                        Text(if (relayOnline) "  ● Relay" else "  ● Cloud", color = Color(0xFF8B5CF6), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Text(if (relayOnline) "  ● Relay" else "  ● Offline", color = Color(0xFF8B5CF6), fontSize = 11.sp, fontWeight = FontWeight.Medium)
                     }
                 } else {
                     Text("Agent Hub", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
