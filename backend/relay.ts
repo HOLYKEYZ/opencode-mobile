@@ -202,18 +202,49 @@ function getAvailableAgents() {
 
 // â”€â”€â”€ WebSocket â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-let ws, reconnectTimer, heartbeatTimer, sessionCode;
+let ws, reconnectTimer, heartbeatTimer, registrationTimer, publicSessionTimer, sessionCode;
+
+function serverHttpUrl() {
+  try {
+    const url = new URL(SERVER_URL);
+    if (url.protocol === 'wss:') url.protocol = 'https:';
+    else if (url.protocol === 'ws:') url.protocol = 'http:';
+    else return null;
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+async function relayIsRegisteredPublicly(code) {
+  const base = serverHttpUrl();
+  if (!base || !code) return true;
+  try {
+    const res = await fetch(`${base}/connect?code=${encodeURIComponent(code)}`, { cache: 'no-store' });
+    if (!res.ok) return false;
+    const json = await res.json().catch(() => null);
+    return json?.relayOnline === true;
+  } catch {
+    return true;
+  }
+}
 
 function connect() {
   if (ws) { ws.close(); ws = null; }
   const socket = new WebSocket(SERVER_URL);
   ws = socket;
   let scheduledReconnect = false;
+  let registered = false;
 
   function scheduleReconnect() {
     if (scheduledReconnect) return;
     scheduledReconnect = true;
     clearInterval(heartbeatTimer);
+    clearTimeout(registrationTimer);
+    clearInterval(publicSessionTimer);
     if (ws === socket) ws = null;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connect, 5000);
@@ -224,6 +255,14 @@ function connect() {
     const config = readLocalConfig();
     const preferredCode = process.env.AGENTHUB_RELAY_CODE || readPersistedRelayCode();
     socket.send(JSON.stringify({ type: 'register_relay', config, preferredCode }));
+    clearTimeout(registrationTimer);
+    registrationTimer = setTimeout(() => {
+      if (ws === socket && !registered) {
+        console.error('Relay registration timed out. Reconnecting...');
+        try { socket.terminate?.(); } catch {}
+        scheduleReconnect();
+      }
+    }, 15000);
     clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => send({ type: 'ping' }), 25000);
   });
@@ -234,10 +273,22 @@ function connect() {
     try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.type === 'relay_registered') {
+      registered = true;
       sessionCode = msg.code;
+      clearTimeout(registrationTimer);
       writePersistedRelayCode(sessionCode);
       console.log(`\nðŸ”— Relay session: ${sessionCode}${msg.reused ? ' (reused)' : ''}\n`);
       printAgentQRCodes(sessionCode);
+      clearInterval(publicSessionTimer);
+      publicSessionTimer = setInterval(async () => {
+        if (ws !== socket || !sessionCode) return;
+        const ok = await relayIsRegisteredPublicly(sessionCode);
+        if (!ok && ws === socket) {
+          console.error(`Relay code ${sessionCode} is missing from the server. Re-registering...`);
+          try { socket.terminate?.(); } catch {}
+          scheduleReconnect();
+        }
+      }, 30000);
       return;
     }
 

@@ -619,7 +619,12 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                             "error" -> {
                                 promptInFlight = false
                                 promptRunning = false
-                                logs = logs + LogLine(System.currentTimeMillis(), "Error: ${json.optString("content")}")
+                                val content = json.optString("content")
+                                logs = logs + LogLine(System.currentTimeMillis(), "Error: $content")
+                                if (content.contains("Session expired", ignoreCase = true) && sessionCode.isNotBlank()) {
+                                    wsStatus = "disconnected"
+                                    try { webSocket?.close(1000, "Session expired; retrying") } catch (_: Exception) {}
+                                }
                             }
                         }
                     }
