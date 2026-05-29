@@ -579,7 +579,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 val detail = json.optJSONObject("detail")
                                 val messages = detail?.optJSONArray("messages")
                                 val chatLogs = detailMessageLogs(messages)
-                                val extras = detailExtraLogs(detail, System.currentTimeMillis() + 10000)
+                                val extras = if (showTechnicalEvents) detailExtraLogs(detail, System.currentTimeMillis() + 10000) else emptyList()
                                 if (chatLogs.isNotEmpty() || extras.isNotEmpty()) logs = chatLogs + extras
                             }
                             "config_updated" -> {
