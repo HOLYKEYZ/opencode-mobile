@@ -2,7 +2,7 @@
 
 Remote control Codex and OpenCode from your phone through a desktop relay.
 
-![Agent Hub phone relay chat](docs/screenshots/phone-relay-chat.svg)
+![Agent Hub phone relay chat](docs/screenshots/phone-relay-chat.jpeg)
 
 ```text
 Phone --wss--> Relay Server <--wss-- Laptop relay

@@ -84,6 +84,14 @@ function scheduleCodexDesktopRefresh(sessionId, clientId, delayMs = 0) {
   setTimeout(() => openCodexDesktopThread(sessionId, clientId), delayMs).unref?.();
 }
 
+function scheduleCodexDesktopRefreshBurst(sessionId, clientId) {
+  if (!sessionId || process.env.AGENTHUB_OPEN_CODEX_DESKTOP === '0') return;
+  openCodexDesktopThread(sessionId, clientId);
+  for (const delayMs of [300, 1200, 3000]) {
+    scheduleCodexDesktopRefresh(sessionId, null, delayMs);
+  }
+}
+
 function buildWindowsCommandLine(cmd, args) {
   return [quoteCmdArg(cmd), ...args.map(quoteCmdArg)].join(' ');
 }
@@ -925,6 +933,26 @@ function sendToCodexTracker(tracker, payload) {
   }
 }
 
+function createCodexTracker(threadId, clientId) {
+  const tracker: any = {
+    clients: new Set(clientId ? [clientId] : []),
+    threadId,
+    turnId: null,
+    agentText: '',
+    reasoningText: '',
+  };
+  tracker.completion = new Promise((resolve, reject) => {
+    tracker.resolve = resolve;
+    tracker.reject = reject;
+  });
+  return tracker;
+}
+
+function attachCodexTrackerClient(tracker, clientId) {
+  if (tracker && clientId) tracker.clients.add(clientId);
+  return tracker;
+}
+
 function trackerForNotification(params) {
   const tracker = activeCodexByThread.get(params.threadId);
   if (!tracker) return null;
@@ -939,7 +967,7 @@ function handleCodexAppNotification(method, params) {
   if (method === 'turn/started') {
     tracker.turnId = params.turn?.id || tracker.turnId || params.turnId;
     sendToCodexTracker(tracker, { type: 'status', content: 'Codex turn started' });
-    scheduleCodexDesktopRefresh(tracker.threadId, null, 250);
+    scheduleCodexDesktopRefreshBurst(tracker.threadId, null);
     return;
   }
 
@@ -1007,7 +1035,7 @@ function handleCodexAppNotification(method, params) {
       sendToCodexTracker(tracker, { type: 'done', content: '' });
       tracker.resolve?.();
     }
-    scheduleCodexDesktopRefresh(tracker.threadId, null, 500);
+    scheduleCodexDesktopRefreshBurst(tracker.threadId, null);
     activeCodexByThread.delete(params.threadId);
   }
 }
@@ -1299,46 +1327,40 @@ function formatCodexJsonEvent(ev) {
 
 async function sendCodexAppPrompt(prompt, clientId, sessionId) {
   await ensureCodexAppServer();
-  const tracker = {
-    clients: new Set([clientId]),
-    threadId: sessionId,
-    turnId: null,
-    agentText: '',
-    reasoningText: '',
-  };
-  const completion = new Promise((resolve, reject) => {
-    tracker.resolve = resolve;
-    tracker.reject = reject;
-  });
 
   send({ type: 'status', clientId, content: `Opening Codex chat ${sessionId}` });
   console.log(`  [codex-app] resume ${sessionId}`);
   const resumed = await callCodexApp('thread/resume', { threadId: sessionId }, 60000);
-  scheduleCodexDesktopRefresh(sessionId, clientId, 250);
+  scheduleCodexDesktopRefreshBurst(sessionId, clientId);
   const thread = resumed?.thread || {};
   const turns = await listCodexAppTurns(sessionId, 12).catch(() => thread.turns || []);
   const activeTurn = [...(turns || [])].reverse().find((turn) => turn?.status === 'inProgress' || turn?.status?.type === 'inProgress');
   if (thread.status?.type === 'active' && activeTurn?.id) {
+    const existingTracker = activeCodexByThread.get(sessionId);
+    const tracker = attachCodexTrackerClient(existingTracker, clientId) || createCodexTracker(sessionId, clientId);
     tracker.turnId = activeTurn.id;
     activeCodexByThread.set(sessionId, tracker);
     send({ type: 'status', clientId, content: `Steering active Codex turn ${activeTurn.id}` });
+    scheduleCodexDesktopRefreshBurst(sessionId, clientId);
     console.log(`  [codex-app] steer ${sessionId} turn=${activeTurn.id}`);
     await callCodexApp('turn/steer', {
       threadId: sessionId,
       expectedTurnId: activeTurn.id,
       input: [{ type: 'text', text: prompt, text_elements: [] }],
     }, 60000);
-    await completion;
+    await tracker.completion;
     const detail = await getCodexSessionDetail(sessionId).catch(() => null);
     if (detail) send({ type: 'session_detail', clientId, detail });
-    openCodexDesktopThread(sessionId, clientId);
+    scheduleCodexDesktopRefreshBurst(sessionId, clientId);
     send({ type: 'done', clientId, content: '' });
     return;
   }
 
   send({ type: 'status', clientId, content: 'Starting Codex turn through app-server' });
   console.log(`  [codex-app] turn/start ${sessionId}`);
+  const tracker = createCodexTracker(sessionId, clientId);
   activeCodexByThread.set(sessionId, tracker);
+  scheduleCodexDesktopRefreshBurst(sessionId, clientId);
 
   const started = await callCodexApp('turn/start', {
     threadId: sessionId,
@@ -1346,11 +1368,11 @@ async function sendCodexAppPrompt(prompt, clientId, sessionId) {
   }, 60000);
   tracker.turnId = started?.turn?.id || tracker.turnId;
 
-  await completion;
+  await tracker.completion;
 
   const detail = await getCodexSessionDetail(sessionId).catch(() => null);
   if (detail) send({ type: 'session_detail', clientId, detail });
-  openCodexDesktopThread(sessionId, clientId);
+  scheduleCodexDesktopRefreshBurst(sessionId, clientId);
   send({ type: 'done', clientId, content: '' });
 }
 

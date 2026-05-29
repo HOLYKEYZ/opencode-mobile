@@ -615,6 +615,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 promptInFlight = false
                                 promptRunning = false
                                 val c = json.optString("content"); if (c.isNotBlank()) logs = logs + LogLine(System.currentTimeMillis(), c)
+                                if (relayOnline && showChats) requestSessions("", webSocket)
                             }
                             "error" -> {
                                 promptInFlight = false
@@ -778,7 +779,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     val isConnected = wsStatus == "connected"
     val canPrompt = isConnected && currentAgent.isNotBlank() && (currentAgent != "codex" || selectedSessionId.isNotBlank())
     val hasDraft = input.isNotBlank() || attachments.isNotEmpty()
-    val canSubmit = canPrompt && (!promptRunning || hasDraft)
+    val canSubmit = canPrompt && hasDraft
 
     // ─── QR Scanner ──────────────────────────────────────────────
     if (showQrScanner) { QrScanner(onScan = onQrScanned, onCancel = { showQrScanner = false }); return }

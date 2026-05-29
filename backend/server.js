@@ -5,7 +5,7 @@ const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 3001;
-const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
+const SESSIONS_FILE = process.env.AGENTHUB_SESSIONS_FILE || path.join(__dirname, 'sessions.json');
 const CHARSET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
 const DEFAULTS = {
