@@ -179,17 +179,30 @@ let ws, reconnectTimer, heartbeatTimer, sessionCode;
 
 function connect() {
   if (ws) { ws.close(); ws = null; }
-  ws = new WebSocket(SERVER_URL);
+  const socket = new WebSocket(SERVER_URL);
+  ws = socket;
+  let scheduledReconnect = false;
 
-  ws.on('open', () => {
+  function scheduleReconnect() {
+    if (scheduledReconnect) return;
+    scheduledReconnect = true;
+    clearInterval(heartbeatTimer);
+    if (ws === socket) ws = null;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, 5000);
+  }
+
+  socket.on('open', () => {
+    if (ws !== socket) return;
     const config = readLocalConfig();
     const preferredCode = process.env.AGENTHUB_RELAY_CODE || readPersistedRelayCode();
-    ws.send(JSON.stringify({ type: 'register_relay', config, preferredCode }));
+    socket.send(JSON.stringify({ type: 'register_relay', config, preferredCode }));
     clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => send({ type: 'ping' }), 25000);
   });
 
-  ws.on('message', async (raw) => {
+  socket.on('message', async (raw) => {
+    if (ws !== socket) return;
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
@@ -229,19 +242,14 @@ function connect() {
     }
   });
 
-  ws.on('close', () => {
-    clearInterval(heartbeatTimer);
+  socket.on('close', () => {
     console.log('âŒ Disconnected. Reconnecting in 5s...');
-    ws = null;
-    reconnectTimer = setTimeout(connect, 5000);
+    scheduleReconnect();
   });
 
-  ws.on('error', (err) => {
-    clearInterval(heartbeatTimer);
+  socket.on('error', (err) => {
     console.error(`âš ï¸  ${err.message}`);
-    ws = null;
-    clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(connect, 5000);
+    scheduleReconnect();
   });
 }
 
