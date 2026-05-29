@@ -75,7 +75,8 @@ function openExternalUrl(url) {
 
 function openCodexDesktopThread(sessionId, clientId) {
   if (!sessionId || process.env.AGENTHUB_OPEN_CODEX_DESKTOP === '0') return;
-  openExternalUrl(`codex://local/${encodeURIComponent(sessionId)}`);
+  const nonce = Date.now().toString(36);
+  openExternalUrl(`codex://local/${encodeURIComponent(sessionId)}?agenthub=${nonce}`);
   if (clientId) send({ type: 'status', clientId, content: 'Opening Codex Desktop chat' });
 }
 
