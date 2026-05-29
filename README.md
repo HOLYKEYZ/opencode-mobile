@@ -98,6 +98,13 @@ $env:RELAY_CODE="EtCjwygP8e"
 node .\scripts\relay-smoke.js
 ```
 
+To also verify phone-to-OpenCode prompt execution and `done` handling, opt in explicitly:
+
+```powershell
+$env:SMOKE_EXECUTE_OPENCODE="1"
+node .\scripts\relay-smoke.js
+```
+
 ## Agents
 
 | Agent | How it is driven |

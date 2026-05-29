@@ -11,6 +11,9 @@ try {
 const serverUrl = process.env.SERVER_URL || process.argv[2] || 'wss://agent-hub-backend-wk48.onrender.com';
 const relayCode = process.env.RELAY_CODE || process.argv[3] || '';
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS || 45000);
+const executeOpenCode = process.env.SMOKE_EXECUTE_OPENCODE === '1' || process.argv.includes('--execute-opencode');
+const openCodeExpected = process.env.SMOKE_OPENCODE_EXPECT || 'AGENTHUB_SMOKE_OK';
+const openCodePrompt = process.env.SMOKE_OPENCODE_PROMPT || `Agent Hub relay smoke test: reply with exactly ${openCodeExpected}.`;
 
 if (!relayCode) {
   console.error('Usage: node scripts/relay-smoke.js <server-url> <relay-code>');
@@ -37,7 +40,14 @@ function withTimeout(label, work) {
 function connectPhone(label) {
   return withTimeout(label, () => new Promise((resolve, reject) => {
     const ws = new WebSocket(serverUrl);
-    const state = { joined: null, sessions: null, codexDetail: null, opencodeSessions: null };
+    const state = {
+      joined: null,
+      sessions: null,
+      selectedCodex: null,
+      codexDetail: null,
+      opencodeSessions: null,
+      opencodeExecution: executeOpenCode ? { selected: null, statuses: [], output: '', done: false } : null,
+    };
 
     function send(payload) {
       ws.send(JSON.stringify(payload));
@@ -54,6 +64,7 @@ function connectPhone(label) {
       }
 
       if (msg.type === 'session_joined') {
+        if (state.joined) return;
         state.joined = msg;
         if (!msg.relay_online) {
           reject(new Error('Relay is offline for this code'));
@@ -65,25 +76,57 @@ function connectPhone(label) {
       }
 
       if (msg.type === 'sessions' && !state.sessions) {
-        state.sessions = msg.sessions || [];
-        const codex = state.sessions.find((session) => session.agent === 'codex' && session.id);
-        if (!codex) {
-          reject(new Error('No Codex sessions returned'));
-          try { ws.close(); } catch {}
-          return;
-        }
+        const sessions = msg.sessions || [];
+        const codex = sessions.find((session) => session.agent === 'codex' && session.id);
+        if (!codex) return;
+        state.sessions = sessions;
+        state.selectedCodex = { id: codex.id, title: codex.title };
         send({ type: 'session_detail', agent: 'codex', sessionId: codex.id });
         return;
       }
 
       if (msg.type === 'session_detail' && msg.detail?.agent === 'codex' && !state.codexDetail) {
-        state.codexDetail = msg.detail;
+        const detail = msg.detail;
+        if (detail.sessionId !== state.selectedCodex?.id) return;
+        const hasUsableDetail = Array.isArray(detail.messages) && detail.messages.length > 0 && detail.metadataScope === 'latest_turn';
+        if (!hasUsableDetail) return;
+        state.codexDetail = detail;
         send({ type: 'session_list', agent: 'opencode' });
         return;
       }
 
-      if (msg.type === 'sessions' && state.sessions && !state.opencodeSessions) {
-        state.opencodeSessions = msg.sessions || [];
+      if (msg.type === 'sessions' && state.sessions && state.codexDetail && !state.opencodeSessions) {
+        const opencodeSessions = (msg.sessions || []).filter((session) => session.agent === 'opencode' && session.id);
+        if (opencodeSessions.length === 0) return;
+        state.opencodeSessions = opencodeSessions;
+        if (!executeOpenCode) {
+          try { ws.close(1000, 'smoke done'); } catch {}
+          resolve(state);
+          return;
+        }
+        const selected = state.opencodeSessions.find((session) => session.agent === 'opencode' && session.id);
+        if (!selected) {
+          reject(new Error('No OpenCode session available for execute smoke'));
+          try { ws.close(); } catch {}
+          return;
+        }
+        state.opencodeExecution.selected = { id: selected.id, title: selected.title };
+        send({ agent: 'opencode', sessionId: selected.id, prompt: openCodePrompt });
+        return;
+      }
+
+      if (executeOpenCode && msg.type === 'status') {
+        state.opencodeExecution?.statuses.push(msg.content || '');
+        return;
+      }
+
+      if (executeOpenCode && (msg.type === 'stream' || msg.type === 'replace_stream')) {
+        if (msg.content) state.opencodeExecution.output = msg.content;
+        return;
+      }
+
+      if (executeOpenCode && msg.type === 'done') {
+        state.opencodeExecution.done = true;
         try { ws.close(1000, 'smoke done'); } catch {}
         resolve(state);
       }
@@ -103,6 +146,7 @@ function summarize(result) {
     agents: result.joined?.available_agents || [],
     totalSessions: sessions.length,
     counts,
+    selectedCodex: result.selectedCodex,
     opencodeSessions: result.opencodeSessions?.length || 0,
     codexDetail: {
       status: detail.status || '',
@@ -112,6 +156,12 @@ function summarize(result) {
       tools: Array.isArray(detail.tools) ? detail.tools.length : 0,
       files: Array.isArray(detail.files) ? detail.files.length : 0,
     },
+    opencodeExecution: result.opencodeExecution ? {
+      selected: result.opencodeExecution.selected,
+      statusCount: result.opencodeExecution.statuses.length,
+      done: result.opencodeExecution.done,
+      output: result.opencodeExecution.output,
+    } : null,
   };
 }
 
@@ -131,9 +181,16 @@ function summarize(result) {
     if (summary.opencodeSessions < 1) failures.push(`${label}: no OpenCode sessions`);
     if (summary.codexDetail.messages < 1) failures.push(`${label}: Codex detail has no messages`);
     if (summary.codexDetail.metadataScope !== 'latest_turn') failures.push(`${label}: Codex metadata is not latest_turn`);
+    if (executeOpenCode) {
+      if (!summary.opencodeExecution?.selected?.id) failures.push(`${label}: no OpenCode execution target`);
+      if (!summary.opencodeExecution?.done) failures.push(`${label}: OpenCode execution did not finish`);
+      if (!summary.opencodeExecution?.output?.includes(openCodeExpected)) {
+        failures.push(`${label}: OpenCode output did not include ${openCodeExpected}`);
+      }
+    }
   }
 
-  console.log(JSON.stringify({ serverUrl, relayCode, first: firstSummary, reconnect: secondSummary }, null, 2));
+  console.log(JSON.stringify({ serverUrl, relayCode, executeOpenCode, first: firstSummary, reconnect: secondSummary }, null, 2));
   if (failures.length) {
     console.error(`Relay smoke failed:\n- ${failures.join('\n- ')}`);
     process.exit(1);
