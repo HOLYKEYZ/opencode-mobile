@@ -6,7 +6,9 @@ const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 3001;
-const SESSIONS_FILE = process.env.AGENTHUB_SESSIONS_FILE || path.join(__dirname, 'sessions.json');
+const BACKEND_ROOT = path.basename(__dirname) === 'dist' ? path.dirname(__dirname) : __dirname;
+const REPO_ROOT = path.dirname(BACKEND_ROOT);
+const SESSIONS_FILE = process.env.AGENTHUB_SESSIONS_FILE || path.join(BACKEND_ROOT, 'sessions.json');
 const CHARSET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
 const DEFAULTS = {
@@ -109,8 +111,8 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/download' || url.pathname === '/') {
     const apkPaths = [
-      path.join(__dirname, '..', 'AgentHub', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
-      path.join(__dirname, 'app-debug.apk'),
+      path.join(REPO_ROOT, 'AgentHub', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
+      path.join(BACKEND_ROOT, 'app-debug.apk'),
     ];
     const apkPath = apkPaths.find(p => fs.existsSync(p));
     const hasApk = !!apkPath;
@@ -133,8 +135,8 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/apk' && (req.method === 'GET' || req.method === 'HEAD')) {
     const apkPaths = [
-      path.join(__dirname, '..', 'AgentHub', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
-      path.join(__dirname, 'app-debug.apk'),
+      path.join(REPO_ROOT, 'AgentHub', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
+      path.join(BACKEND_ROOT, 'app-debug.apk'),
     ];
     const apkPath = apkPaths.find(p => fs.existsSync(p));
     if (!apkPath) { res.writeHead(404); res.end('APK not found'); return; }
