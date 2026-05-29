@@ -130,7 +130,7 @@ const server = http.createServer((req, res) => {
     </div></body></html>`);
     return;
   }
-  if (url.pathname === '/apk' && req.method === 'GET') {
+  if (url.pathname === '/apk' && (req.method === 'GET' || req.method === 'HEAD')) {
     const apkPaths = [
       path.join(__dirname, '..', 'AgentHub', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
       path.join(__dirname, 'app-debug.apk'),
@@ -139,6 +139,7 @@ const server = http.createServer((req, res) => {
     if (!apkPath) { res.writeHead(404); res.end('APK not found'); return; }
     const stat = fs.statSync(apkPath);
     res.writeHead(200, { 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': 'attachment; filename="AgentHub.apk"', 'Content-Length': stat.size });
+    if (req.method === 'HEAD') { res.end(); return; }
     fs.createReadStream(apkPath).pipe(res);
     return;
   }
