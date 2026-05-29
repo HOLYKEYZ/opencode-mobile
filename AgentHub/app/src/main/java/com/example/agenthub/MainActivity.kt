@@ -70,6 +70,8 @@ val AGENT_NAMES = mapOf("codex" to "Codex", "opencode" to "OpenCode", "system" t
 const val MAX_DETAIL_MESSAGES_ON_PHONE = 40
 const val MAX_DETAIL_MESSAGE_CHARS = 3000
 const val MAX_DETAIL_TOTAL_CHARS = 60000
+const val MAX_RENDERED_LOG_LINES = 90
+const val MAX_PERSISTED_TRANSCRIPT_CHARS = 60000
 
 fun parseRemoteSessions(raw: String): List<RemoteSession> {
     if (raw.isBlank()) return emptyList()
@@ -174,10 +176,16 @@ fun AgentHubScreen(initialDeepLink: String = "") {
 
     var input by remember { mutableStateOf("") }
     var logs by remember {
+        val savedTranscript = prefs.getString("LAST_TRANSCRIPT", "").orEmpty()
+            .takeLast(MAX_PERSISTED_TRANSCRIPT_CHARS)
+        val savedLogs = savedTranscript
+            .split(Regex("\\n\\s*\\n"))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .takeLast(MAX_RENDERED_LOG_LINES)
+            .mapIndexed { index, text -> LogLine(System.currentTimeMillis() + index, text, "append") }
         mutableStateOf(
-            prefs.getString("LAST_TRANSCRIPT", "")?.takeIf { it.isNotBlank() }
-                ?.let { listOf(LogLine(System.currentTimeMillis(), it, "replace")) }
-                ?: emptyList()
+            savedLogs
         )
     }
     var wsStatus by remember { mutableStateOf("connecting") }
@@ -325,23 +333,23 @@ fun AgentHubScreen(initialDeepLink: String = "") {
 
     fun consolidatedLogs(): List<LogLine> {
         val consolidated = mutableListOf<LogLine>()
-        for (log in logs) {
+        for (log in logs.takeLast(MAX_RENDERED_LOG_LINES * 2)) {
             if (log.type == "replace" && consolidated.isNotEmpty() && consolidated.last().type == "replace") {
                 consolidated[consolidated.size - 1] = log
             } else {
                 consolidated.add(log)
             }
         }
-        return consolidated
+        return consolidated.takeLast(MAX_RENDERED_LOG_LINES)
     }
 
     fun visibleTranscript(): String {
-        return consolidatedLogs().map { it.text }.filter { it.isNotBlank() }.joinToString("\n\n").takeLast(200000)
+        return consolidatedLogs().map { it.text }.filter { it.isNotBlank() }.joinToString("\n\n").takeLast(MAX_PERSISTED_TRANSCRIPT_CHARS)
     }
 
     fun appendLog(line: LogLine) {
         if (logs.lastOrNull()?.text == line.text && logs.lastOrNull()?.type == line.type) return
-        logs = logs + line
+        logs = (logs + line).takeLast(MAX_RENDERED_LOG_LINES * 2)
     }
 
     fun statusLogType(text: String): String {
@@ -679,8 +687,12 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     }
 
     LaunchedEffect(logs) {
+        if (logs.size > MAX_RENDERED_LOG_LINES * 2) {
+            logs = logs.takeLast(MAX_RENDERED_LOG_LINES * 2)
+            return@LaunchedEffect
+        }
         val text = visibleTranscript()
-        prefs.edit().putString("LAST_TRANSCRIPT", text.takeLast(200000)).apply()
+        prefs.edit().putString("LAST_TRANSCRIPT", text.takeLast(MAX_PERSISTED_TRANSCRIPT_CHARS)).apply()
         val renderedCount = consolidatedLogs().size
         if (renderedCount > 0 && stickToBottom) {
             try {
