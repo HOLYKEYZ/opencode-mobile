@@ -73,6 +73,27 @@ function openExternalUrl(url) {
   } catch {}
 }
 
+function reloadCodexDesktopWindow() {
+  if (!isWin || process.env.AGENTHUB_RELOAD_CODEX_DESKTOP === '0') return;
+  const script = [
+    'Add-Type -AssemblyName Microsoft.VisualBasic',
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$p = Get-Process Codex -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1',
+    'if ($p) {',
+    '  [Microsoft.VisualBasic.Interaction]::AppActivate([int]$p.Id) | Out-Null',
+    '  Start-Sleep -Milliseconds 200',
+    "  [System.Windows.Forms.SendKeys]::SendWait('^{r}')",
+    '}',
+  ].join('; ');
+  try {
+    spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script], {
+      stdio: 'ignore',
+      windowsHide: true,
+      detached: true,
+    }).unref();
+  } catch {}
+}
+
 function openCodexDesktopThread(sessionId, clientId) {
   if (!sessionId || process.env.AGENTHUB_OPEN_CODEX_DESKTOP === '0') return;
   const nonce = Date.now().toString(36);
@@ -91,6 +112,11 @@ function scheduleCodexDesktopRefreshBurst(sessionId, clientId) {
   for (const delayMs of [300, 1200, 3000]) {
     scheduleCodexDesktopRefresh(sessionId, null, delayMs);
   }
+}
+
+function scheduleCodexDesktopReload(delayMs = 1200) {
+  if (!isWin || process.env.AGENTHUB_RELOAD_CODEX_DESKTOP === '0') return;
+  setTimeout(reloadCodexDesktopWindow, delayMs).unref?.();
 }
 
 function buildWindowsCommandLine(cmd, args) {
@@ -1403,6 +1429,7 @@ async function sendCodexAppPrompt(prompt, clientId, sessionId) {
     const detail = await getCodexSessionDetail(sessionId).catch(() => null);
     if (detail) send({ type: 'session_detail', clientId, detail });
     scheduleCodexDesktopRefreshBurst(sessionId, clientId);
+    scheduleCodexDesktopReload();
     send({ type: 'done', clientId, content: '' });
     return;
   }
@@ -1424,6 +1451,7 @@ async function sendCodexAppPrompt(prompt, clientId, sessionId) {
   const detail = await getCodexSessionDetail(sessionId).catch(() => null);
   if (detail) send({ type: 'session_detail', clientId, detail });
   scheduleCodexDesktopRefreshBurst(sessionId, clientId);
+  scheduleCodexDesktopReload();
   send({ type: 'done', clientId, content: '' });
 }
 
