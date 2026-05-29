@@ -361,18 +361,18 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         var next = startId
         val commands = detail.optJSONArray("commands")
         if (commands != null && commands.length() > 0) {
-            out += LogLine(next++, "commands run: ${commands.length()}", "tool")
+            out += LogLine(next++, "latest turn commands: ${commands.length()}", "tool")
         }
         val tools = detail.optJSONArray("tools")
         if (tools != null && tools.length() > 0) {
             val names = (0 until tools.length()).mapNotNull { i ->
                 tools.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }
             }.distinct().take(6)
-            out += LogLine(next++, if (names.isEmpty()) "tools used: ${tools.length()}" else "tools used: ${names.joinToString(", ")}", "tool")
+            out += LogLine(next++, if (names.isEmpty()) "latest turn tools: ${tools.length()}" else "latest turn tools: ${names.joinToString(", ")}", "tool")
         }
         val files = detail.optJSONArray("files")
         if (files != null && files.length() > 0) {
-            out += LogLine(next++, "files touched: ${files.length()}", "file")
+            out += LogLine(next++, "latest turn files: ${files.length()}", "file")
         }
         val diff = detail.optJSONArray("diff")
         if (diff != null && diff.length() > 0) {

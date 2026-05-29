@@ -250,6 +250,7 @@ function connect() {
       try {
         const active = msg.sessionId ? activeCodexByThread.get(msg.sessionId) : null;
         if (active && msg.clientId) active.clients.add(msg.clientId);
+        if (msg.agent !== 'opencode' && msg.sessionId) openCodexDesktopThread(msg.sessionId, msg.clientId);
         const detail = msg.agent === 'opencode'
           ? await getOpenCodeSessionDetail(msg.sessionId)
           : await getCodexSessionDetail(msg.sessionId);
@@ -779,13 +780,24 @@ function describeThreadItem(item) {
   return null;
 }
 
+function turnSortValue(turn) {
+  return Math.max(
+    Number(turn?.startedAt || 0),
+    Number(turn?.completedAt || 0),
+    Number(turn?.updatedAt || 0),
+  );
+}
+
 function parseCodexAppThreadDetail(thread) {
   const messages = [];
   const commands = [];
   const tools = [];
   const files = new Set();
+  const turns = [...(thread?.turns || [])].sort((a, b) => turnSortValue(a) - turnSortValue(b));
+  const latestTurn = turns[turns.length - 1] || null;
 
-  for (const turn of [...(thread?.turns || [])].reverse()) {
+  for (const turn of turns) {
+    const includeTurnEvents = latestTurn && turn?.id === latestTurn.id;
     for (const item of turn.items || []) {
       if (item.type === 'userMessage') {
         const text = stripTerminalNoise(userInputText(item.content));
@@ -793,7 +805,7 @@ function parseCodexAppThreadDetail(thread) {
       } else if (item.type === 'agentMessage') {
         const text = stripTerminalNoise(item.text || '');
         if (text && !isHiddenCodexText(text)) messages.push({ id: item.id, role: 'assistant', text, type: 'message', phase: item.phase || '' });
-      } else if (item.type === 'commandExecution') {
+      } else if (includeTurnEvents && item.type === 'commandExecution') {
         commands.push({
           id: item.id,
           name: 'shell',
@@ -803,9 +815,9 @@ function parseCodexAppThreadDetail(thread) {
           exitCode: item.exitCode,
           durationMs: item.durationMs,
         });
-      } else if (item.type === 'fileChange') {
+      } else if (includeTurnEvents && item.type === 'fileChange') {
         for (const file of pathsFromFileChanges(item.changes)) files.add(file);
-      } else {
+      } else if (includeTurnEvents) {
         const described = describeThreadItem(item);
         if (described) tools.push({ id: item.id, name: item.type, arguments: described.text });
       }
@@ -824,6 +836,8 @@ function parseCodexAppThreadDetail(thread) {
     files: [...files],
     commands: commands.slice(-80),
     tools: tools.slice(-80),
+    metadataScope: latestTurn?.id ? 'latest_turn' : 'none',
+    metadataTurnId: latestTurn?.id || '',
     status: thread.status?.type || '',
   };
 }

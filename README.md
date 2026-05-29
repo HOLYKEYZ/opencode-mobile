@@ -17,7 +17,7 @@ Phone --wss--> Relay Server <--wss-- Laptop relay
 - Codex support: lists Codex app chats including loaded/current chats, opens a selected chat in Codex Desktop with `codex://threads/<threadId>`, resumes/steers turns through the local Codex app-server, and blocks accidental new Codex sessions from the phone.
 - OpenCode support: starts or reuses the local OpenCode HTTP server, lists recent OpenCode sessions, and prompts a selected session.
 - Live phone transcript: shows user prompts, assistant responses, thinking/status events, shell/tool activity, and file-change summaries without dumping stale terminal noise.
-- Technical event toggle: command output, aggregate tool lists, and file counts stay hidden unless explicitly enabled in Settings.
+- Technical event toggle: command output plus latest-turn tool/file counts stay hidden unless explicitly enabled in Settings.
 - Running-turn composer: while a turn is active, the send button shows progress; typing a draft changes it back to send so the prompt is steered into the active turn.
 - Chat controls: refresh chat lists, collapse/show the chat list, copy the visible transcript, and jump back to the latest message when scrolled up.
 - In-app update entry: Settings includes an update-page button for grabbing the latest APK.
