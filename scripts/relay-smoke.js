@@ -57,6 +57,9 @@ function connectPhone(label) {
 
     ws.on('open', () => send({ type: 'join_session', code: relayCode }));
     ws.on('error', reject);
+    ws.on('close', (code, reason) => {
+      reject(new Error(`WebSocket closed unexpectedly with code ${code}: ${reason}`));
+    });
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw);
       if (msg.type === 'error') {
