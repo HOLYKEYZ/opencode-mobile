@@ -1,33 +1,33 @@
-# codex-OC_mobile
+# opencode-devin-mobile
 
-Remote control Codex and OpenCode from your phone through a desktop relay.
+Remote control OpenCode and Devin from your phone through a desktop relay.
 
 ![Agent Hub phone relay chat](docs/screenshots/phone-relay-chat.jpeg)
 
-Latest phone-side debug capture showing the Codex Desktop stale-view case that
+Latest phone-side debug capture showing the desktop agent stale-view case that
 the relay now tries to force-refresh after phone turns:
 
 ![Agent Hub phone debug capture](docs/screenshots/phone-desktop-stale.jpg)
 
 ```text
 Phone --wss--> Relay Server <--wss-- Laptop relay
-                                      |-- Codex local session
-                                      `-- OpenCode local server
+                                       |-- OpenCode local server
+                                       `-- Devin CLI
 ```
 
 ## Features
 
 - Relay-only execution: the cloud server never calls model APIs and does not need API keys.
 - QR or manual pairing: keep the same Render URL and swap only the session code/agent.
-- Codex support: lists Codex app chats including loaded/current chats, opens a selected chat in Codex Desktop with `codex://local/<threadId>`, resumes/steers turns through the local Codex app-server, and blocks accidental new Codex sessions from the phone.
-- OpenCode support: starts or reuses the local OpenCode HTTP server, lists recent OpenCode sessions, and prompts a selected session.
+- OpenCode support: starts or reuses the local OpenCode HTTP server, lists recent OpenCode sessions, auto-selects the most recent chat when no session is picked, and prompts the selected session.
+- Devin support: drives the local Devin CLI (`devin`) in single-turn mode, lists recent Devin sessions, auto-selects the most recent chat, and enables web search by default.
 - Live phone transcript: shows user prompts, assistant responses, thinking/status events, shell/tool activity, and file-change summaries without dumping stale terminal noise.
 - Technical event toggle: command output plus latest-turn tool/file counts stay hidden unless explicitly enabled in Settings.
 - Running-turn composer: while a turn is active, the send button shows progress; typing a draft changes it back to send so the prompt is steered into the active turn.
 - Chat controls: refresh chat lists, collapse/show the chat list, copy the visible transcript, and jump back to the latest message when scrolled up.
 - In-app update entry: Settings includes an update-page button for grabbing the latest APK.
-- Model controls: Settings and the top bar can switch the current relay model; Codex app-server turns receive the selected model override.
-- Token usage: Settings keeps the latest token usage summary reported by Codex or OpenCode turns.
+- Model controls: Settings and the top bar can switch the current relay model; OpenCode and Devin turns receive the selected model override.
+- Token usage: Settings keeps the latest token usage summary reported by OpenCode or Devin turns.
 - Desktop relay persistence: the relay keeps the same code across reconnects unless `backend/relay-state.json` is deleted or `AGENTHUB_RELAY_CODE` is changed.
 - Background-friendly Android client: keeps the screen awake while open, preserves the selected chat/transcript, reconnects after socket drops, and refreshes state on resume.
 - Voice input: Android/Google speech-to-text can fill the prompt box directly.
@@ -72,7 +72,7 @@ npm install
 SERVER_URL=wss://your-server.onrender.com npm run relay
 ```
 
-The relay checks for signed-in local Codex/OpenCode installs and prints a QR code. Secrets stay on the laptop.
+The relay checks for signed-in local OpenCode/Devin installs and prints a QR code. Secrets stay on the laptop.
 
 On Windows PowerShell:
 
@@ -130,8 +130,8 @@ node .\scripts\relay-smoke.js
 
 | Agent | How it is driven |
 |-------|------------------|
-| Codex | Local `codex app-server` API first; CLI JSON resume only if explicitly enabled with `AGENTHUB_CODEX_CLI_FALLBACK=1` |
-| OpenCode | Local `opencode serve` HTTP API on `127.0.0.1:4096` |
+| OpenCode | Local `opencode serve` HTTP API on `127.0.0.1:4096`; auto-selects the most recent chat if none is picked |
+| Devin | Local `devin` CLI in single-turn mode (`devin --permission-mode bypass -p -- <prompt>`); auto-selects the most recent session if none is picked; web search is enabled by default |
 
 `backend/server.ts` and `backend/relay.ts` are the backend source files. Runtime JavaScript is generated into `backend/dist/` by `npm run build`.
 
@@ -143,14 +143,14 @@ node .\scripts\relay-smoke.js
 | `SERVER_URL` | `ws://localhost:3001` | Relay server URL used by the compiled relay |
 | `AGENTHUB_CWD` | repo root | Working directory for local agents |
 | `OPENCODE_PORT` | `4096` | Local OpenCode server port |
-| `CODEX_APP_SERVER_URL` | `ws://127.0.0.1:4545` | Local Codex app-server URL |
+| `DEVIN_PATH` | `devin` | Path to the Devin CLI binary |
+| `DEVIN_SESSION_DIR` | `~/.local/share/devin/sessions` | Directory for Devin session storage |
 | `AGENTHUB_RELAY_CODE` | unset | Optional fixed relay code |
-| `AGENTHUB_CODEX_CLI_FALLBACK` | unset | Set to `1` to allow Codex CLI resume fallback |
 
 ## Notes
 
 - The phone app can keep `wss://agent-hub-backend-wk48.onrender.com` as the server URL. The session code and selected agent are separate settings.
-- The cloud server is only a WebSocket switchboard between phone and laptop relay. Codex/OpenCode credentials and files stay on the laptop.
+- The cloud server is only a WebSocket switchboard between phone and laptop relay. OpenCode/Devin credentials and files stay on the laptop.
 - The relay can survive the lid closing only if Windows stays awake. Use `scripts/start-relay-keepawake.ps1` or set your power plan manually.
 - Uploads are stored under `.agenthub_uploads/` in the relay working directory.
 - If the exact screenshot asset is needed, save it under `docs/screenshots/` and replace the README image path.

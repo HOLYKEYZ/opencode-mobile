@@ -14,18 +14,16 @@ const WORKSPACE_CWD = path.resolve(process.env.AGENTHUB_CWD || process.env.WORKS
 const isWin = os.platform() === 'win32';
 const RELAY_STATE_FILE = path.join(RELAY_DIR, 'relay-state.json');
 
+const OPENCODE_DESKTOP_PATH = 'C:\\Users\\USER\\AppData\\Local\\Programs\\@opencode-aidesktop\\OpenCode.exe';
+const DEVIN_DESKTOP_PATH = 'C:\\Users\\USER\\AppData\\Local\\Programs\\devin\\Devin.exe';
+const OPENCODE_CLI_PATH = path.join(RELAY_DIR, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe');
+
 const AGENTS = [
-  { id: 'codex',    name: 'Codex',    modelKey: 'CODEX_MODEL',    cmd: process.env.CODEX_PATH || 'codex', args: p => ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', p], localPromptCli: true, jsonExec: true },
-  { id: 'opencode', name: 'OpenCode', modelKey: 'OPENCODE_MODEL', cmd: null, args: p => ['run', '--dangerously-skip-permissions', '--format', 'json', p], localPromptCli: true, serverBacked: true },
+  { id: 'opencode', name: 'OpenCode', modelKey: 'OPENCODE_MODEL', cmd: null, args: p => ['run', '--dangerously-skip-permissions', '--format', 'json', p], localPromptCli: true, serverBacked: true, desktopPath: OPENCODE_DESKTOP_PATH },
+  { id: 'devin',    name: 'Devin',    modelKey: 'DEVIN_MODEL',    cmd: process.env.DEVIN_PATH || 'devin', args: p => ['--permission-mode', 'bypass', '-p', '--', p], localPromptCli: true, jsonExec: false, desktopPath: DEVIN_DESKTOP_PATH },
 ];
 const MODEL_KEY_BY_AGENT = Object.fromEntries(AGENTS.map(a => [a.id, a.modelKey]));
 let relayConfig = {};
-
-const PTY_AGENT_ARGS = {
-  codex: (prompt, sessionId) => sessionId
-    ? ['resume', sessionId, prompt, '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen']
-    : ['--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen', prompt],
-};
 
 function quoteCmdArg(value) {
   const raw = String(value);
@@ -33,104 +31,18 @@ function quoteCmdArg(value) {
   return /[\s"]/u.test(raw) ? `"${escaped}"` : escaped;
 }
 
-function spawnAgentCommand(cmd, args) {
+function spawnAgentCommand(cmd, args, cwd = process.cwd()) {
+  const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' };
   if (!isWin) {
-    return spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
+    return spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env, cwd });
   }
-
-  // Windows CLI tools installed through npm/cargo are often .cmd/.ps1 shims.
-  // Running through cmd.exe avoids EPERM from child_process.spawn on those shims.
   const commandLine = [quoteCmdArg(cmd), ...args.map(quoteCmdArg)].join(' ');
   return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', commandLine], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env },
+    env,
     windowsHide: true,
+    cwd,
   });
-}
-
-function spawnCodexCommand(args) {
-  const nodeLaunch = resolveCodexNodeLaunch(args);
-  if (nodeLaunch) {
-    return spawn(nodeLaunch.command, nodeLaunch.args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
-      windowsHide: true,
-    });
-  }
-  return spawnAgentCommand(process.env.CODEX_PATH || 'codex', args);
-}
-
-function openExternalUrl(url) {
-  try {
-    if (isWin) {
-      spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'start', '""', url], {
-        stdio: 'ignore',
-        windowsHide: true,
-        detached: true,
-      }).unref();
-      return;
-    }
-    const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-    spawn(opener, [url], { stdio: 'ignore', detached: true }).unref();
-  } catch {}
-}
-
-function reloadCodexDesktopWindow() {
-  if (!isWin || process.env.AGENTHUB_RELOAD_CODEX_DESKTOP === '0') return;
-  const script = [
-    'Add-Type -AssemblyName Microsoft.VisualBasic',
-    'Add-Type -AssemblyName System.Windows.Forms',
-    '$p = Get-Process Codex -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1',
-    'if ($p) {',
-    '  [Microsoft.VisualBasic.Interaction]::AppActivate([int]$p.Id) | Out-Null',
-    '  Start-Sleep -Milliseconds 200',
-    "  [System.Windows.Forms.SendKeys]::SendWait('^{r}')",
-    '}',
-  ].join('; ');
-  try {
-    spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script], {
-      stdio: 'ignore',
-      windowsHide: true,
-      detached: true,
-    }).unref();
-  } catch {}
-}
-
-function openCodexDesktopThread(sessionId, clientId) {
-  if (!sessionId || process.env.AGENTHUB_OPEN_CODEX_DESKTOP === '0') return;
-  openExternalUrl(`codex://local/${encodeURIComponent(sessionId)}`);
-  if (clientId) send({ type: 'status', clientId, content: 'Opening Codex Desktop chat' });
-}
-
-function scheduleCodexDesktopRefresh(sessionId, clientId, delayMs = 0) {
-  if (!sessionId || process.env.AGENTHUB_OPEN_CODEX_DESKTOP === '0') return;
-  setTimeout(() => openCodexDesktopThread(sessionId, clientId), delayMs).unref?.();
-}
-
-function scheduleCodexDesktopRefreshBurst(sessionId, clientId) {
-  if (!sessionId || process.env.AGENTHUB_OPEN_CODEX_DESKTOP === '0') return;
-  openCodexDesktopThread(sessionId, clientId);
-  for (const delayMs of [300, 1200, 3000]) {
-    scheduleCodexDesktopRefresh(sessionId, null, delayMs);
-  }
-}
-
-function scheduleCodexDesktopReload(delayMs = 1200) {
-  if (!isWin || process.env.AGENTHUB_RELOAD_CODEX_DESKTOP === '0') return;
-  setTimeout(reloadCodexDesktopWindow, delayMs).unref?.();
-}
-
-function scheduleCodexDesktopHardRefresh(sessionId, clientId) {
-  if (!sessionId || process.env.AGENTHUB_OPEN_CODEX_DESKTOP === '0') return;
-  for (const delayMs of [0, 1000, 2500]) {
-    scheduleCodexDesktopRefresh(sessionId, delayMs === 0 ? clientId : null, delayMs);
-  }
-  if (isWin && process.env.AGENTHUB_RELOAD_CODEX_DESKTOP !== '0') {
-    setTimeout(() => {
-      reloadCodexDesktopWindow();
-      setTimeout(reloadCodexDesktopWindow, 800).unref?.();
-    }, 1600).unref?.();
-  }
 }
 
 function buildWindowsCommandLine(cmd, args) {
@@ -145,24 +57,11 @@ function buildPtyCommand(cmd, args) {
   };
 }
 
-function resolveCodexNodeLaunch(args) {
-  if (!isWin) return null;
-  const codexJs = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-  if (!fs.existsSync(codexJs)) return null;
-  return { command: process.execPath, args: [codexJs, ...args] };
-}
-
-function buildPtyAgentLaunch(agent, cmd, args) {
-  if (agent === 'codex') {
-    const nodeLaunch = resolveCodexNodeLaunch(args);
-    if (nodeLaunch) return nodeLaunch;
-  }
-  return buildPtyCommand(cmd, args);
-}
-
 function getCmd(a) {
   if (a.cmd) return a.cmd;
   if (a.id === 'opencode') {
+    if (fs.existsSync(OPENCODE_CLI_PATH)) return OPENCODE_CLI_PATH;
+    if (fs.existsSync(OPENCODE_DESKTOP_PATH)) return OPENCODE_DESKTOP_PATH;
     if (isWin) {
       const fp = path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE, 'AppData', 'Local'), 'OpenCode', 'opencode-cli.exe');
       try { fs.accessSync(fp); return fp; } catch {}
@@ -187,21 +86,6 @@ function commandExists(command) {
   return false;
 }
 
-function readCodexConfig() {
-  try {
-    const authPath = path.join(os.homedir(), '.codex', 'auth.json');
-    if (!fs.existsSync(authPath)) return {};
-    const cfg = {};
-    const configPath = path.join(os.homedir(), '.codex', 'config.toml');
-    if (fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, 'utf-8');
-      const model = raw.match(/model\s*=\s*"([^"]+)"/)?.[1];
-      if (model) cfg.CODEX_MODEL = model;
-    }
-    return cfg;
-  } catch { return {}; }
-}
-
 function readOpenCodeConfig() {
   try {
     const authPath = path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json');
@@ -211,8 +95,26 @@ function readOpenCodeConfig() {
   } catch { return {}; }
 }
 
+function devinAuthPaths() {
+  return [
+    process.env.DEVIN_AUTH_PATH,
+    path.join(os.homedir(), '.config', 'devin', 'auth.json'),
+    path.join(os.homedir(), '.local', 'share', 'devin', 'auth.json'),
+    path.join(os.homedir(), '.devin', 'auth.json'),
+  ].filter(Boolean);
+}
+
+function readDevinConfig() {
+  try {
+    const authPath = devinAuthPaths().find((p) => fs.existsSync(p));
+    if (!authPath) return {};
+    JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+    return {};
+  } catch { return {}; }
+}
+
 function readLocalConfig() {
-  const cfg = { ...readCodexConfig(), ...readOpenCodeConfig() };
+  const cfg = { ...readOpenCodeConfig(), ...readDevinConfig() };
   cfg.LOCAL_AGENTS = getAvailableAgents().map(a => a.id);
   return cfg;
 }
@@ -249,17 +151,20 @@ function writePersistedRelayCode(code) {
   } catch {}
 }
 
-// Detect available agents
-
 function getAvailableAgents() {
   return AGENTS.filter((a) => {
     if (!a.localPromptCli) return false;
-    const cmd = getCmd(a);
-    if (!commandExists(cmd)) return false;
-    if (a.id === 'codex') return fs.existsSync(path.join(os.homedir(), '.codex', 'auth.json'));
     if (a.id === 'opencode') {
+      if (fs.existsSync(OPENCODE_DESKTOP_PATH)) return true;
+      const cmd = getCmd(a);
+      if (!commandExists(cmd)) return false;
       const dataDir = path.join(os.homedir(), '.local', 'share', 'opencode');
       return fs.existsSync(path.join(dataDir, 'auth.json')) || fs.existsSync(path.join(dataDir, 'opencode.db'));
+    }
+    if (a.id === 'devin') {
+      const cmd = getCmd(a);
+      if (!commandExists(cmd)) return false;
+      return devinAuthPaths().some((p) => fs.existsSync(p));
     }
     return false;
   });
@@ -375,12 +280,9 @@ function connect() {
       send({ type: 'sessions', clientId: msg.clientId, sessions });
     } else if (msg.type === 'session_detail') {
       try {
-        const active = msg.sessionId ? activeCodexByThread.get(msg.sessionId) : null;
-        if (active && msg.clientId) active.clients.add(msg.clientId);
-        if (msg.agent !== 'opencode' && msg.sessionId) openCodexDesktopThread(msg.sessionId, msg.clientId);
         const detail = msg.agent === 'opencode'
           ? await getOpenCodeSessionDetail(msg.sessionId)
-          : await getCodexSessionDetail(msg.sessionId);
+          : await getDevinSessionDetail(msg.sessionId);
         send({ type: 'session_detail', clientId: msg.clientId, detail });
       } catch (err) {
         send({ type: 'error', clientId: msg.clientId, content: err.message });
@@ -412,148 +314,58 @@ function sleep(ms) {
 }
 
 const OPENCODE_PORT = Number(process.env.OPENCODE_PORT || 4096);
-const OPENCODE_BASE_URL = process.env.OPENCODE_BASE_URL || `http://127.0.0.1:${OPENCODE_PORT}`;
+const OPENCODE_DEFAULT_BASE_URL = process.env.OPENCODE_BASE_URL || `http://127.0.0.1:${OPENCODE_PORT}`;
+let opencodeBaseUrl = OPENCODE_DEFAULT_BASE_URL;
 let opencodeServerProcess = null;
+let opencodeDesktopLaunchedByRelay = false;
 
-const CODEX_APP_SERVER_URL = process.env.CODEX_APP_SERVER_URL || 'ws://127.0.0.1:4545';
-let codexAppProcess = null;
-let codexAppWs = null;
-let codexAppReady = null;
-let codexAppNextId = 1;
-const codexAppPending = new Map();
-const activeCodexByThread = new Map();
-
-function isWsOpen(socket) {
-  return socket?.readyState === WebSocket.OPEN || socket?.readyState === 1;
+function openCodeLogDir() {
+  return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'ai.opencode.desktop', 'logs');
 }
 
-function rejectCodexPending(reason) {
-  for (const pending of codexAppPending.values()) {
-    clearTimeout(pending.timer);
-    pending.reject(reason);
+function latestOpenCodeLogFolder() {
+  const root = openCodeLogDir();
+  if (!fs.existsSync(root)) return null;
+  let latest = null;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (!latest || entry.name > latest.name) latest = entry;
   }
-  codexAppPending.clear();
+  return latest ? path.join(root, latest.name) : null;
 }
 
-function attachCodexAppSocket(socket) {
-  socket.on('message', (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw.toString()); } catch { return; }
-
-    if (msg.id !== undefined && codexAppPending.has(msg.id)) {
-      const pending = codexAppPending.get(msg.id);
-      codexAppPending.delete(msg.id);
-      clearTimeout(pending.timer);
-      if (msg.error) pending.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-      else pending.resolve(msg.result);
-      return;
-    }
-
-    if (msg.method) handleCodexAppNotification(msg.method, msg.params || {});
-  });
-
-  socket.on('close', () => {
-    codexAppWs = null;
-    codexAppReady = null;
-    rejectCodexPending(new Error('Codex app-server disconnected.'));
-  });
-
-  socket.on('error', (err) => {
-    rejectCodexPending(err);
-  });
-}
-
-function openCodexAppSocket(timeoutMs = 5000) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(CODEX_APP_SERVER_URL);
-    const timer = setTimeout(() => {
-      try { socket.close(); } catch {}
-      reject(new Error(`Codex app-server did not answer on ${CODEX_APP_SERVER_URL}`));
-    }, timeoutMs);
-    socket.once('open', () => {
-      clearTimeout(timer);
-      attachCodexAppSocket(socket);
-      resolve(socket);
-    });
-    socket.once('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
-}
-
-function spawnCodexAppServer() {
-  if (codexAppProcess && !codexAppProcess.killed) return;
-  const args = ['app-server', '--listen', CODEX_APP_SERVER_URL];
-  const launch = resolveCodexNodeLaunch(args);
-  if (launch) {
-    codexAppProcess = spawn(launch.command, launch.args, {
-      stdio: ['ignore', 'ignore', 'ignore'],
-      cwd: WORKSPACE_CWD,
-      env: { ...process.env },
-      windowsHide: true,
-    });
-  } else {
-    codexAppProcess = spawnAgentCommand(process.env.CODEX_PATH || 'codex', args);
-  }
-}
-
-async function ensureCodexAppServer() {
-  if (isWsOpen(codexAppWs)) return;
-  if (codexAppReady) return codexAppReady;
-
-  codexAppReady = (async () => {
-    try {
-      codexAppWs = await openCodexAppSocket(2500);
-    } catch {
-      spawnCodexAppServer();
-      for (let i = 0; i < 20; i++) {
-        await sleep(500);
-        try {
-          codexAppWs = await openCodexAppSocket(1500);
-          break;
-        } catch {}
-      }
-      if (!isWsOpen(codexAppWs)) {
-        throw new Error(`Could not start Codex app-server on ${CODEX_APP_SERVER_URL}.`);
-      }
-    }
-
-    await callCodexApp('initialize', {
-      clientInfo: { name: 'agent-hub-relay', title: 'Agent Hub Relay', version: '1.0.0' },
-      capabilities: { experimentalApi: true, requestAttestation: false, optOutNotificationMethods: [] },
-    }, 15000);
-  })();
-
+function findOpenCodeServerUrlInLog(logFolder) {
+  if (!logFolder) return null;
+  const mainLog = path.join(logFolder, 'main.log');
+  if (!fs.existsSync(mainLog)) return null;
   try {
-    await codexAppReady;
-  } catch (err) {
-    codexAppReady = null;
-    codexAppWs = null;
-    throw err;
+    const text = fs.readFileSync(mainLog, 'utf-8');
+    const matches = [...text.matchAll(/server ready\s*\{\s*url:\s*['"]([^'"]+)['"]/gi)];
+    return matches.length ? matches[matches.length - 1][1] : null;
+  } catch {
+    return null;
   }
 }
 
-async function callCodexApp(method, params = {}, timeoutMs = 30000) {
-  if (!isWsOpen(codexAppWs)) {
-    if (method === 'initialize') throw new Error('Codex app-server socket is not open.');
-    await ensureCodexAppServer();
+function getOpenCodeLogFolders() {
+  const root = openCodeLogDir();
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => path.join(root, e.name))
+    .sort((a, b) => path.basename(b).localeCompare(path.basename(a)));
+}
+
+async function discoverOpenCodeServerUrl() {
+  for (const folder of getOpenCodeLogFolders()) {
+    const url = findOpenCodeServerUrlInLog(folder);
+    if (!url) continue;
+    try {
+      const health = await requestJson(`${url.replace(/\/$/, '')}/global/health`);
+      if (health) return url;
+    } catch {}
   }
-  const id = codexAppNextId++;
-  const message = { id, method, params };
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      codexAppPending.delete(id);
-      reject(new Error(`Codex app-server ${method} timed out.`));
-    }, timeoutMs);
-    codexAppPending.set(id, { resolve, reject, timer });
-    codexAppWs.send(JSON.stringify(message), (err) => {
-      if (!err) return;
-      codexAppPending.delete(id);
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
+  return null;
 }
 
 async function requestJson(url, init = {}) {
@@ -574,31 +386,108 @@ async function requestJson(url, init = {}) {
 
 async function isOpenCodeServerRunning() {
   try {
-    const health = await requestJson(`${OPENCODE_BASE_URL}/global/health`);
+    const health = await requestJson(`${opencodeBaseUrl}/global/health`);
     return !!health;
   } catch {
     return false;
   }
 }
 
-async function ensureOpenCodeServer() {
-  if (await isOpenCodeServerRunning()) return;
-  const opencode = AGENTS.find((a) => a.id === 'opencode');
-  const cmd = opencode ? getCmd(opencode) : null;
-  if (!cmd || !commandExists(cmd)) throw new Error('OpenCode CLI not found.');
-
-  opencodeServerProcess = spawn(cmd, ['serve', '--hostname', '127.0.0.1', '--port', String(OPENCODE_PORT), '--log-level', 'ERROR'], {
-    stdio: ['ignore', 'ignore', 'ignore'],
-    cwd: WORKSPACE_CWD,
-    env: { ...process.env },
-    windowsHide: true,
-  });
-
-  for (let i = 0; i < 30; i++) {
-    if (await isOpenCodeServerRunning()) return;
+async function waitForOpenCodeDesktopServer(timeoutMs = 60000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const url = await discoverOpenCodeServerUrl();
+    if (url) return url;
     await sleep(500);
   }
-  throw new Error(`OpenCode server did not start on ${OPENCODE_BASE_URL}.`);
+  return null;
+}
+
+function openCodeDesktopIsInstalled() {
+  return fs.existsSync(OPENCODE_DESKTOP_PATH);
+}
+
+function openCodeCliIsInstalled() {
+  if (fs.existsSync(OPENCODE_CLI_PATH)) return true;
+  const cmd = AGENTS.find((a) => a.id === 'opencode') ? getCmd({ id: 'opencode' }) : 'opencode';
+  return commandExists(cmd) && cmd !== OPENCODE_DESKTOP_PATH;
+}
+
+function runOpenCodeCli(args, timeoutMs = 10 * 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    const cmd = getCmd({ id: 'opencode' });
+    if (!cmd || !commandExists(cmd)) { reject(new Error('OpenCode CLI not found')); return; }
+    const child = spawnAgentCommand(cmd, args, WORKSPACE_CWD);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', reject);
+    const timer = setTimeout(() => { try { child.kill(); } catch {} reject(new Error('OpenCode CLI timed out')); }, timeoutMs);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) { resolve(stdout); return; }
+      const tail = stripTerminalNoise(stderr || stdout).slice(-800);
+      reject(new Error(tail || `OpenCode exited ${code}`));
+    });
+  });
+}
+
+function parseOpenCodeCliJsonLines(raw) {
+  const lines = String(raw || '').split('\n').filter((l) => l.trim());
+  const items = [];
+  for (const line of lines) {
+    try { items.push(JSON.parse(line)); } catch {}
+  }
+  return items;
+}
+
+async function ensureOpenCodeServer() {
+  if (await isOpenCodeServerRunning()) return;
+
+  const discovered = await discoverOpenCodeServerUrl();
+  if (discovered) {
+    opencodeBaseUrl = discovered.replace(/\/$/, '');
+    if (await isOpenCodeServerRunning()) return;
+  }
+
+  if (openCodeCliIsInstalled()) {
+    const cmd = getCmd({ id: 'opencode' });
+    if (!cmd || !commandExists(cmd)) throw new Error('OpenCode CLI not found.');
+    console.log(`Starting OpenCode CLI server on ${opencodeBaseUrl}...`);
+    opencodeServerProcess = spawn(cmd, ['serve', '--hostname', '127.0.0.1', '--port', String(OPENCODE_PORT), '--log-level', 'ERROR'], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+      cwd: WORKSPACE_CWD,
+      env: { ...process.env },
+      windowsHide: true,
+    });
+    for (let i = 0; i < 60; i++) {
+      if (await isOpenCodeServerRunning()) return;
+      await sleep(500);
+    }
+    throw new Error(`OpenCode server did not start on ${opencodeBaseUrl}.`);
+  }
+
+  if (openCodeDesktopIsInstalled()) {
+    console.log('Launching OpenCode Desktop to expose local API...');
+    opencodeServerProcess = spawn(OPENCODE_DESKTOP_PATH, [], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+      cwd: WORKSPACE_CWD,
+      env: { ...process.env },
+      windowsHide: false,
+      detached: true,
+    });
+    opencodeDesktopLaunchedByRelay = true;
+    const url = await waitForOpenCodeDesktopServer(60000);
+    if (url) {
+      opencodeBaseUrl = url.replace(/\/$/, '');
+      console.log(`OpenCode Desktop API ready at ${opencodeBaseUrl}`);
+      return;
+    }
+    throw new Error('OpenCode Desktop started but its local API URL could not be discovered from logs.');
+  }
+
+  throw new Error('OpenCode Desktop or CLI not found. Install OpenCode to use this agent.');
 }
 
 function responseItems(json) {
@@ -607,20 +496,6 @@ function responseItems(json) {
   if (Array.isArray(json?.data)) return json.data;
   if (Array.isArray(json?.items)) return json.items;
   return [];
-}
-
-function toOpenCodeSession(item) {
-  return {
-    agent: 'opencode',
-    id: item.id,
-    title: item.title || item.slug || item.id,
-    subtitle: item.directory || item.path || 'OpenCode',
-    directory: item.directory || '',
-    updatedAt: item.time?.updated || item.time_updated || 0,
-    createdAt: item.time?.created || item.time_created || 0,
-    status: '',
-    summary: item.summary || null,
-  };
 }
 
 function stripTerminalNoise(value) {
@@ -653,584 +528,45 @@ function capDetailMessages(messages, limit = DETAIL_MESSAGE_LIMIT) {
   }));
 }
 
-function readJsonLine(line) {
-  try { return JSON.parse(line); } catch { return null; }
-}
-
-function codexSessionsRoot() {
-  return path.join(os.homedir(), '.codex', 'sessions');
-}
-
-function collectJsonlFiles(dir, out = []) {
-  if (!fs.existsSync(dir)) return out;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) collectJsonlFiles(full, out);
-    else if (entry.isFile() && entry.name.endsWith('.jsonl')) out.push(full);
-  }
-  return out;
-}
-
-function readCodexIndexTitles() {
-  const titles = new Map();
-  const indexPath = path.join(os.homedir(), '.codex', 'session_index.jsonl');
-  if (!fs.existsSync(indexPath)) return titles;
-  for (const line of fs.readFileSync(indexPath, 'utf-8').split(/\r?\n/).filter(Boolean)) {
-    const item = readJsonLine(line);
-    if (item?.id) titles.set(item.id, item.thread_name || item.title || item.id);
-  }
-  return titles;
-}
-
-function extractTextParts(content) {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.map((part) => {
-    if (!part) return '';
-    if (typeof part === 'string') return part;
-    return part.text || part.message || part.output || '';
-  }).filter(Boolean).join('\n');
-}
-
-function parseCodexRollout(file, includeEvents = false) {
-  const stat = fs.statSync(file);
-  const lines = fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter(Boolean);
-  const messages = [];
-  const commands = [];
-  const tools = [];
-  const files = new Set();
-  let meta = {};
-  let firstUserText = '';
-
-  for (const line of lines) {
-    const ev = readJsonLine(line);
-    if (!ev) continue;
-    const payload = ev.payload || {};
-    const time = ev.timestamp || payload.timestamp || null;
-
-    if (ev.type === 'session_meta') {
-      meta = { ...meta, ...payload };
-      continue;
-    }
-
-    if (ev.type === 'response_item') {
-      if (payload.type === 'message') {
-        const role = payload.role || 'message';
-        if (!['user', 'assistant'].includes(role)) continue;
-        const text = stripTerminalNoise(extractTextParts(payload.content));
-        if (text && !isHiddenCodexText(text)) {
-          if (role === 'user' && !firstUserText) firstUserText = text;
-          messages.push({ role, text, time, type: 'message' });
-        }
-      } else if (includeEvents && (payload.type === 'function_call' || payload.type === 'custom_tool_call')) {
-        const name = payload.name || payload.tool || payload.type || 'tool';
-        const args = stripTerminalNoise(payload.arguments || payload.input || '');
-        if (name === 'shell_command' && args) {
-          const command = extractCommandFromArgs(args);
-          commands.push({ name, command: command || truncateText(args, 500), time });
-        } else {
-          tools.push({ name, arguments: truncateText(args, 700), time });
-        }
-        for (const candidate of extractPathsFromText(args)) files.add(candidate);
-      } else if (includeEvents && (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output')) {
-        const text = stripTerminalNoise(payload.output || payload.stdout || '');
-        if (text) tools.push({ name: payload.type || 'tool_output', arguments: truncateText(text, 900), time });
-        for (const candidate of extractPathsFromText(text)) files.add(candidate);
-      } else if (includeEvents && /web_search|tool_search|browser|mcp/i.test(payload.type || '')) {
-        tools.push({ name: payload.type || 'tool', arguments: summarizeToolPayload(payload, 900), time });
-      } else if (includeEvents && payload.type === 'reasoning') {
-        const summary = Array.isArray(payload.summary) ? payload.summary.map((s) => s?.text || s).filter(Boolean).join('\n') : '';
-        tools.push({ name: 'thinking', arguments: summary ? truncateText(summary, 700) : 'Reasoning step recorded', time });
-      }
-      continue;
-    }
-
-    if (ev.type === 'event_msg') {
-      if (payload.type === 'user_message') {
-        const text = stripTerminalNoise(payload.message || '');
-        if (text && !firstUserText) firstUserText = text;
-      } else if (payload.type === 'agent_message') {
-        const text = stripTerminalNoise(payload.message || '');
-        if (text && !isHiddenCodexText(text)) messages.push({ role: 'assistant', text, time, type: 'message' });
-      } else if (includeEvents && /tool|exec|browser|file|patch|command|web_search|mcp/i.test(payload.type || '')) {
-        tools.push({ name: payload.type || 'event', arguments: summarizeToolPayload(payload, 1000), time });
-        if (payload.changes) {
-          for (const changed of Object.keys(payload.changes)) files.add(changed);
-        }
-      }
-    }
-  }
-
+function toOpenCodeSession(item) {
   return {
-    id: meta.id || path.basename(file, '.jsonl'),
-    file,
-    meta,
-    firstUserText,
-    messages: dedupeAdjacentMessages(messages),
-    commands,
-    tools,
-    files: [...files],
-    updatedAt: stat.mtimeMs,
-    createdAt: stat.birthtimeMs || stat.ctimeMs,
+    agent: 'opencode',
+    id: item.id,
+    title: item.title || item.slug || item.id,
+    subtitle: item.directory || item.path || 'OpenCode',
+    directory: item.directory || '',
+    updatedAt: item.time?.updated || item.time_updated || 0,
+    createdAt: item.time?.created || item.time_created || 0,
+    status: '',
+    summary: item.summary || null,
   };
-}
-
-function isHiddenCodexText(text) {
-  return /^Workspace:\s+/i.test(text)
-    || /^<environment_context>/i.test(text)
-    || text.includes('You are Codex, a coding agent')
-    || text.includes('# Instructions');
-}
-
-function dedupeAdjacentMessages(messages) {
-  const out = [];
-  for (const msg of messages) {
-    const prev = out[out.length - 1];
-    if (prev && prev.role === msg.role && prev.text === msg.text) continue;
-    out.push(msg);
-  }
-  return out;
-}
-
-function extractCommandFromArgs(raw) {
-  try {
-    const obj = JSON.parse(raw);
-    return obj.command || '';
-  } catch {
-    return '';
-  }
-}
-
-function summarizeToolPayload(payload, max = 900) {
-  const compact = {};
-  for (const key of ['name', 'tool', 'status', 'call_id', 'query', 'action', 'arguments', 'input', 'output', 'stdout', 'stderr', 'success', 'duration']) {
-    if (payload?.[key] !== undefined) compact[key] = payload[key];
-  }
-  return truncateText(Object.keys(compact).length ? JSON.stringify(compact) : JSON.stringify(payload || {}), max);
-}
-
-function extractPathsFromText(raw) {
-  const text = String(raw || '');
-  const matches = text.match(/[A-Z]:\\[^\s"',)]+|(?:\.{0,2}\/)?[A-Za-z0-9_.@-]+(?:\/[A-Za-z0-9_.@-]+)+/g) || [];
-  return matches.map((m) => m.replace(/\\+/g, '\\')).filter((m) => /\.[A-Za-z0-9]{1,8}$/.test(m)).slice(0, 50);
-}
-
-function codexThreadTitle(thread) {
-  return thread?.name || truncateText(thread?.preview || '', 72) || thread?.id || 'Codex chat';
-}
-
-function codexThreadProject(thread) {
-  const cwd = String(thread?.cwd || '');
-  return cwd ? path.basename(cwd) : 'Codex';
-}
-
-function toCodexAppSession(thread, loadedIds = new Set()) {
-  const cwd = String(thread?.cwd || '');
-  const project = codexThreadProject(thread);
-  const status = thread?.status?.type || '';
-  const loaded = loadedIds.has(thread.id);
-  const latestTurnTime = Math.max(
-    0,
-    ...(thread.turns || []).flatMap((turn) => [Number(turn.startedAt || 0), Number(turn.completedAt || 0)]),
-  ) * 1000;
-  const updatedAt = Math.max(Number(thread.updatedAt || 0) * 1000, latestTurnTime);
-  return {
-    agent: 'codex',
-    id: thread.id,
-    title: codexThreadTitle(thread),
-    subtitle: cwd ? `${project} - ${cwd}${loaded || status === 'active' ? ' - loaded' : ''}` : 'Codex',
-    directory: cwd,
-    project,
-    path: thread.path || '',
-    updatedAt,
-    createdAt: Number(thread.createdAt || 0) * 1000,
-    originator: thread.source || '',
-    status,
-    loaded,
-  };
-}
-
-function userInputText(content) {
-  if (!Array.isArray(content)) return '';
-  return content.map((part) => {
-    if (!part) return '';
-    if (part.type === 'text') return part.text || '';
-    if (part.type === 'localImage') return `[image: ${part.path || 'local image'}]`;
-    if (part.type === 'image') return `[image: ${part.url || 'image'}]`;
-    if (part.type === 'mention') return `@${part.name || part.path || 'mention'}`;
-    if (part.type === 'skill') return `$${part.name || part.path || 'skill'}`;
-    return `[${part.type || 'input'}]`;
-  }).filter(Boolean).join('\n');
-}
-
-function pathsFromFileChanges(changes = []) {
-  return (Array.isArray(changes) ? changes : [])
-    .map((change) => change?.path)
-    .filter(Boolean);
-}
-
-function describeThreadItem(item) {
-  if (!item) return null;
-  if (item.type === 'commandExecution') {
-    const suffix = item.status ? ` (${typeof item.status === 'string' ? item.status : item.status.type || 'running'})` : '';
-    return { kind: 'command', text: `command: ${item.command}${suffix}` };
-  }
-  if (item.type === 'fileChange') {
-    const files = pathsFromFileChanges(item.changes);
-    return { kind: 'file', text: files.length ? `file: ${files.join('\nfile: ')}` : 'file: patch updated' };
-  }
-  if (item.type === 'mcpToolCall') {
-    return { kind: 'tool', text: `tool: ${item.server}.${item.tool}` };
-  }
-  if (item.type === 'dynamicToolCall') {
-    return { kind: 'tool', text: `tool: ${[item.namespace, item.tool].filter(Boolean).join('.') || 'tool'}` };
-  }
-  if (item.type === 'collabAgentToolCall') {
-    const receivers = Array.isArray(item.receiverThreadIds) && item.receiverThreadIds.length
-      ? ` -> ${item.receiverThreadIds.join(', ')}`
-      : '';
-    return { kind: 'tool', text: `agent: ${item.tool}${receivers}` };
-  }
-  if (item.type === 'webSearch') {
-    return { kind: 'tool', text: `browser/search: ${item.query || 'web search'}` };
-  }
-  if (item.type === 'imageView') {
-    return { kind: 'tool', text: `image: ${item.path}` };
-  }
-  if (item.type === 'imageGeneration') {
-    return { kind: 'tool', text: `image generation: ${item.status || ''}${item.savedPath ? ` ${item.savedPath}` : ''}`.trim() };
-  }
-  if (item.type === 'reasoning') {
-    const summary = Array.isArray(item.summary) ? item.summary.join('\n') : '';
-    return { kind: 'tool', text: summary ? `thinking: ${truncateText(summary, 1000)}` : 'thinking...' };
-  }
-  return null;
-}
-
-function turnSortValue(turn) {
-  return Math.max(
-    Number(turn?.startedAt || 0),
-    Number(turn?.completedAt || 0),
-    Number(turn?.updatedAt || 0),
-  );
-}
-
-function statusType(status) {
-  if (!status) return '';
-  if (typeof status === 'string') return status;
-  return status.type || '';
-}
-
-function parseCodexAppThreadDetail(thread) {
-  const messages = [];
-  const commands = [];
-  const tools = [];
-  const files = new Set();
-  const turns = [...(thread?.turns || [])].sort((a, b) => turnSortValue(a) - turnSortValue(b));
-  const latestTurn = turns[turns.length - 1] || null;
-  const latestTurnStatus = statusType(latestTurn?.status);
-  const status = ['active', 'inProgress', 'running'].includes(latestTurnStatus) ? 'active' : 'idle';
-
-  for (const turn of turns) {
-    const includeTurnEvents = latestTurn && turn?.id === latestTurn.id;
-    for (const item of turn.items || []) {
-      if (item.type === 'userMessage') {
-        const text = stripTerminalNoise(userInputText(item.content));
-        if (text) messages.push({ id: item.id, role: 'user', text, type: 'message' });
-      } else if (item.type === 'agentMessage') {
-        const text = stripTerminalNoise(item.text || '');
-        if (text && !isHiddenCodexText(text)) messages.push({ id: item.id, role: 'assistant', text, type: 'message', phase: item.phase || '' });
-      } else if (includeTurnEvents && item.type === 'commandExecution') {
-        commands.push({
-          id: item.id,
-          name: 'shell',
-          command: item.command || '',
-          cwd: item.cwd || '',
-          output: truncateText(item.aggregatedOutput || '', 1200),
-          exitCode: item.exitCode,
-          durationMs: item.durationMs,
-        });
-      } else if (includeTurnEvents && item.type === 'fileChange') {
-        for (const file of pathsFromFileChanges(item.changes)) files.add(file);
-      } else if (includeTurnEvents) {
-        const described = describeThreadItem(item);
-        if (described) tools.push({ id: item.id, name: item.type, arguments: described.text });
-      }
-    }
-  }
-
-  return {
-    agent: 'codex',
-    sessionId: thread.id,
-    title: codexThreadTitle(thread),
-    directory: thread.cwd || '',
-    project: codexThreadProject(thread),
-    path: thread.path || '',
-    updatedAt: Number(thread.updatedAt || 0) * 1000,
-    messages: capDetailMessages(messages),
-    files: [...files],
-    commands: commands.slice(-80),
-    tools: tools.slice(-80),
-    metadataScope: latestTurn?.id ? 'latest_turn' : 'none',
-    metadataTurnId: latestTurn?.id || '',
-    status,
-  };
-}
-
-async function listCodexAppTurns(threadId, limit = 60) {
-  const result = await callCodexApp('thread/turns/list', {
-    threadId,
-    limit,
-    cursor: null,
-  }, 60000);
-  return Array.isArray(result?.data) ? result.data : [];
-}
-
-async function readCodexAppThreadWithTurns(threadId, turnLimit = 60) {
-  const result = await callCodexApp('thread/read', { threadId }, 60000);
-  const thread = result?.thread || {};
-  try {
-    thread.turns = await listCodexAppTurns(threadId, turnLimit);
-  } catch (err) {
-    thread.turns = Array.isArray(thread.turns) ? thread.turns : [];
-  }
-  return thread;
-}
-
-function sendToCodexTracker(tracker, payload) {
-  if (!tracker) return;
-  for (const clientId of tracker.clients) {
-    send({ ...payload, clientId });
-  }
-}
-
-function createCodexTracker(threadId, clientId) {
-  const tracker: any = {
-    clients: new Set(clientId ? [clientId] : []),
-    threadId,
-    turnId: null,
-    agentText: '',
-    reasoningText: '',
-  };
-  tracker.completion = new Promise((resolve, reject) => {
-    tracker.resolve = resolve;
-    tracker.reject = reject;
-  });
-  return tracker;
-}
-
-function attachCodexTrackerClient(tracker, clientId) {
-  if (tracker && clientId) tracker.clients.add(clientId);
-  return tracker;
-}
-
-function numberFromUsage(obj, keys) {
-  for (const key of keys) {
-    const value = obj?.[key];
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-  }
-  return 0;
-}
-
-function usageSummary(value) {
-  if (!value || typeof value !== 'object') return '';
-  const usage = value.usage || value.token_usage || value.tokens || value;
-  const input = numberFromUsage(usage, ['input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens']);
-  const output = numberFromUsage(usage, ['output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens']);
-  const cached = numberFromUsage(usage, ['cached_input_tokens', 'cachedInputTokens', 'cached_tokens', 'cachedTokens']);
-  const reasoning = numberFromUsage(usage, ['reasoning_tokens', 'reasoningTokens']);
-  const total = numberFromUsage(usage, ['total_tokens', 'totalTokens']) || input + output;
-  const parts = [];
-  if (total) parts.push(`total ${total}`);
-  if (input) parts.push(`in ${input}`);
-  if (output) parts.push(`out ${output}`);
-  if (cached) parts.push(`cached ${cached}`);
-  if (reasoning) parts.push(`reasoning ${reasoning}`);
-  return parts.length ? `tokens: ${parts.join(' | ')}` : '';
-}
-
-function trackerForNotification(params) {
-  const tracker = activeCodexByThread.get(params.threadId);
-  if (!tracker) return null;
-  if (tracker.turnId && params.turnId && tracker.turnId !== params.turnId) return null;
-  return tracker;
-}
-
-function handleCodexAppNotification(method, params) {
-  const tracker = trackerForNotification(params);
-  if (!tracker) return;
-
-  if (method === 'turn/started') {
-    tracker.turnId = params.turn?.id || tracker.turnId || params.turnId;
-    sendToCodexTracker(tracker, { type: 'status', content: 'Codex turn started' });
-    scheduleCodexDesktopRefreshBurst(tracker.threadId, null);
-    return;
-  }
-
-  if (method === 'item/agentMessage/delta') {
-    if (tracker.agentItemId !== params.itemId) {
-      tracker.agentItemId = params.itemId;
-      tracker.agentText = '';
-    }
-    tracker.agentText = (tracker.agentText || '') + (params.delta || '');
-    sendToCodexTracker(tracker, { type: 'replace_stream', content: tracker.agentText });
-    return;
-  }
-
-  if (method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') {
-    tracker.reasoningText = (tracker.reasoningText || '') + (params.delta || '');
-    sendToCodexTracker(tracker, { type: 'status', content: `thinking: ${truncateText(tracker.reasoningText, 1000)}` });
-    return;
-  }
-
-  if (method === 'item/commandExecution/outputDelta') {
-    const text = stripTerminalNoise(params.delta || '');
-    if (text) sendToCodexTracker(tracker, { type: 'status', content: `command output: ${truncateText(text, 1200)}` });
-    return;
-  }
-
-  if (method === 'item/mcpToolCall/progress') {
-    sendToCodexTracker(tracker, { type: 'status', content: `tool: ${params.message || 'MCP tool running'}` });
-    return;
-  }
-
-  if (method === 'item/started' || method === 'item/completed') {
-    const described = describeThreadItem(params.item);
-    if (described) sendToCodexTracker(tracker, { type: 'status', content: described.text });
-    return;
-  }
-
-  if (method === 'item/fileChange/patchUpdated') {
-    const files = pathsFromFileChanges(params.changes);
-    sendToCodexTracker(tracker, { type: 'status', content: files.length ? `file: ${files.join('\nfile: ')}` : 'file: patch updated' });
-    return;
-  }
-
-  if (method === 'turn/diff/updated') {
-    const files = extractPathsFromText(params.diff || '');
-    sendToCodexTracker(tracker, { type: 'status', content: files.length ? `file diff: ${files.slice(0, 20).join('\nfile diff: ')}` : 'file diff updated' });
-    return;
-  }
-
-  if (method === 'rawResponseItem/completed') {
-    const item = params.item || {};
-    const usage = usageSummary(item);
-    if (usage) sendToCodexTracker(tracker, { type: 'status', content: usage });
-    if (/web_search|tool_search|browser|mcp|function_call|custom_tool_call|local_shell/i.test(item.type || '')) {
-      sendToCodexTracker(tracker, { type: 'status', content: `${item.type}: ${summarizeToolPayload(item, 1000)}` });
-    }
-    return;
-  }
-
-  if (method === 'turn/completed') {
-    const usage = usageSummary(params.turn || params);
-    if (usage) sendToCodexTracker(tracker, { type: 'status', content: usage });
-    const status = params.turn?.status;
-    const failed = status && typeof status === 'object' && status.type === 'failed';
-    if (failed) {
-      const message = params.turn?.error?.message || 'Codex turn failed.';
-      sendToCodexTracker(tracker, { type: 'error', content: message });
-      tracker.reject?.(new Error(message));
-    } else {
-      sendToCodexTracker(tracker, { type: 'done', content: '' });
-      tracker.resolve?.();
-    }
-    scheduleCodexDesktopRefreshBurst(tracker.threadId, null);
-    activeCodexByThread.delete(params.threadId);
-  }
-}
-
-async function listCodexAppSessions() {
-  await ensureCodexAppServer();
-  const loadedResult = await callCodexApp('thread/loaded/list', { limit: 200 }, 15000).catch(() => ({ data: [] }));
-  const loadedIds = new Set(Array.isArray(loadedResult?.data) ? loadedResult.data : []);
-  const result = await callCodexApp('thread/list', {
-    limit: 200,
-    sortKey: 'updated_at',
-    sortDirection: 'desc',
-    archived: false,
-    sourceKinds: [],
-  }, 30000);
-  const threadsById = new Map((result?.data || []).filter((thread) => thread?.id).map((thread) => [thread.id, thread]));
-  for (const id of loadedIds) {
-    if (threadsById.has(id)) continue;
-    try {
-      threadsById.set(id, await readCodexAppThreadWithTurns(id, 10));
-    } catch (err) {
-      console.log(`  [codex-app] loaded thread read failed ${id}: ${err.message}`);
-    }
-  }
-  return [...threadsById.values()]
-    .map((thread) => toCodexAppSession(thread, loadedIds))
-    .filter((s) => s.id)
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-}
-
-async function getCodexAppSessionDetail(sessionId) {
-  await ensureCodexAppServer();
-  return parseCodexAppThreadDetail(await readCodexAppThreadWithTurns(sessionId, 80));
-}
-
-function getCodexRollouts(limit = 200) {
-  return collectJsonlFiles(codexSessionsRoot())
-    .map((file) => {
-      try { return { file, mtime: fs.statSync(file).mtimeMs }; } catch { return null; }
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.mtime - a.mtime)
-    .slice(0, limit)
-    .map((item) => item.file);
 }
 
 async function listOpenCodeSessions() {
   try {
-    await ensureOpenCodeServer();
-    const json = await requestJson(`${OPENCODE_BASE_URL}/session?limit=100`);
-    return responseItems(json).map(toOpenCodeSession).filter((s) => s.id);
+    const raw = await runOpenCodeCli(['session', 'list', '--format', 'json'], 20000);
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed) ? parsed : [];
+    return items.map((item) => ({
+      agent: 'opencode',
+      id: item.id || '',
+      title: item.title || item.slug || item.id || 'OpenCode chat',
+      subtitle: item.directory || item.path || WORKSPACE_CWD,
+      directory: item.directory || '',
+      updatedAt: item.updated || item.time?.updated || item.time_updated || 0,
+      createdAt: item.created || item.time?.created || item.time_created || 0,
+      status: '',
+      summary: item.summary || null,
+    })).filter((s) => s.id);
   } catch (err) {
+    console.error('  [opencode] session list error:', err.message);
     return [{ agent: 'opencode', id: '', title: `OpenCode unavailable: ${err.message}`, subtitle: '', updatedAt: 0, error: true }];
   }
 }
 
-function listCodexRolloutSessions() {
-  const titles = readCodexIndexTitles();
-  return getCodexRollouts(1000).map((file) => {
-    try {
-      const parsed = parseCodexRollout(file, false);
-      const cwd = parsed.meta.cwd || '';
-      const project = cwd ? path.basename(cwd) : 'Codex';
-      const title = titles.get(parsed.id) || truncateText(parsed.firstUserText, 72) || parsed.id;
-      return {
-        agent: 'codex',
-        id: parsed.id,
-        title,
-        subtitle: cwd ? `${project} - ${cwd}` : 'Codex',
-        directory: cwd,
-        project,
-        path: file,
-        updatedAt: parsed.updatedAt,
-        createdAt: parsed.createdAt,
-        originator: parsed.meta.originator || '',
-      };
-    } catch {
-      return null;
-    }
-  }).filter(Boolean);
-}
-
-async function listCodexSessions() {
-  try {
-    return await listCodexAppSessions();
-  } catch (err) {
-    console.log(`  [codex-app] session list fallback: ${err.message}`);
-    return listCodexRolloutSessions();
-  }
-}
-
-async function listLocalSessions(agent) {
-  const codexSessions = agent && agent !== 'codex' ? [] : await listCodexSessions();
-  const opencodeSessions = agent && agent !== 'opencode' ? [] : await listOpenCodeSessions();
-  return [...codexSessions, ...opencodeSessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+async function getMostRecentOpenCodeSession() {
+  const sessions = await listOpenCodeSessions();
+  return sessions.filter((s) => s.id && !s.error).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null;
 }
 
 function formatOpenCodePart(part) {
@@ -1262,62 +598,19 @@ function formatOpenCodeMessage(message) {
 }
 
 async function getOpenCodeSessionDetail(sessionId) {
-  await ensureOpenCodeServer();
-  const [messagesJson, diffJson, todoJson] = await Promise.all([
-    requestJson(`${OPENCODE_BASE_URL}/session/${encodeURIComponent(sessionId)}/message?limit=60`).catch((err) => ({ error: err.message })),
-    requestJson(`${OPENCODE_BASE_URL}/session/${encodeURIComponent(sessionId)}/diff`).catch(() => []),
-    requestJson(`${OPENCODE_BASE_URL}/session/${encodeURIComponent(sessionId)}/todo`).catch(() => []),
-  ]);
   return {
     agent: 'opencode',
     sessionId,
-    messages: capDetailMessages(responseItems(messagesJson).map(formatOpenCodeMessage), 60),
-    diff: responseItems(diffJson),
-    todo: responseItems(todoJson),
-  };
-}
-
-function findCodexRollout(sessionId) {
-  for (const file of getCodexRollouts(500)) {
-    try {
-      const parsed = parseCodexRollout(file, false);
-      if (parsed.id === sessionId || path.basename(file, '.jsonl').includes(sessionId)) return file;
-    } catch {}
-  }
-  return null;
-}
-
-async function getCodexSessionDetail(sessionId) {
-  try {
-    return await getCodexAppSessionDetail(sessionId);
-  } catch (err) {
-    console.log(`  [codex-app] detail fallback: ${err.message}`);
-  }
-  const file = findCodexRollout(sessionId);
-  if (!file) throw new Error(`Codex session not found: ${sessionId}`);
-  const parsed = parseCodexRollout(file, true);
-  return {
-    agent: 'codex',
-    sessionId: parsed.id,
-    title: truncateText(parsed.firstUserText, 90) || parsed.id,
-    directory: parsed.meta.cwd || '',
-    project: parsed.meta.cwd ? path.basename(parsed.meta.cwd) : '',
-    path: file,
-    updatedAt: parsed.updatedAt,
-    messages: capDetailMessages(parsed.messages),
-    files: parsed.files,
-    commands: parsed.commands.slice(-50),
-    tools: parsed.tools.slice(-50),
+    title: sessionId,
+    directory: WORKSPACE_CWD,
+    messages: [],
+    diff: [],
+    todo: [],
   };
 }
 
 async function createOpenCodeSession() {
-  await ensureOpenCodeServer();
-  const json = await requestJson(`${OPENCODE_BASE_URL}/session`, {
-    method: 'POST',
-    body: '{}',
-  });
-  return json?.value || json?.data || json;
+  return { id: '' };
 }
 
 function sanitizeAttachmentName(name, index) {
@@ -1347,265 +640,280 @@ function promptWithAttachments(prompt, attachments, clientId) {
 }
 
 async function sendOpenCodePrompt(prompt, clientId, sessionId, attachments = []) {
-  await ensureOpenCodeServer();
   prompt = promptWithAttachments(prompt, attachments, clientId);
   let target = sessionId;
+  if (target === undefined || target === null) {
+    const recent = await getMostRecentOpenCodeSession();
+    if (recent) {
+      target = recent.id;
+      send({ type: 'status', clientId, content: `Using most recent OpenCode chat: ${recent.title || target}` });
+    }
+  }
   if (!target) {
-    const created = await createOpenCodeSession();
-    target = created?.id;
+    send({ type: 'status', clientId, content: 'Starting new OpenCode session' });
   }
-  if (!target) throw new Error('OpenCode session not found.');
 
-  const before = await getOpenCodeSessionDetail(target).catch(() => null);
-  const beforeLastAssistantId = before?.messages?.filter((m) => m.role === 'assistant').slice(-1)[0]?.id || '';
-  send({ type: 'status', clientId, content: `Sending to OpenCode session ${target}` });
-  await requestJson(`${OPENCODE_BASE_URL}/session/${encodeURIComponent(target)}/prompt_async`, {
-    method: 'POST',
-    body: JSON.stringify({ parts: [{ type: 'text', text: prompt }] }),
-  });
-  send({ type: 'status', clientId, content: `OpenCode accepted prompt for ${target}` });
+  const args = ['run', '--dangerously-skip-permissions', '--format', 'json', '--dir', WORKSPACE_CWD];
+  const model = getSelectedModel('opencode');
+  if (model) args.push('--model', model);
+  if (target) {
+    args.push('--continue', '--session', target);
+  } else {
+    args.push('--title', 'OC-mob prompt');
+  }
+  args.push('--', prompt);
 
-  let sawAssistant = false;
-  for (let i = 0; i < 90; i++) {
-    await sleep(2000);
-    const detail = await getOpenCodeSessionDetail(target).catch(() => null);
-    if (detail?.messages?.length) {
-      const latestAssistant = detail.messages
-        .filter((m) => m.role === 'assistant' && m.text && m.id !== beforeLastAssistantId)
-        .slice(-1)[0];
-      if (latestAssistant) {
-        sawAssistant = true;
-        send({ type: 'replace_stream', clientId, content: latestAssistant.text });
-        const usage = usageSummary({ tokens: latestAssistant.tokens });
-        if (usage) send({ type: 'status', clientId, content: usage });
+  send({ type: 'status', clientId, content: target ? `Sending to OpenCode session ${target}` : 'Sending to new OpenCode session' });
+  console.log(`  [opencode] $ opencode ${args.join(' ')}`);
+
+  let finalText = '';
+  let usage = null;
+  await new Promise((resolve, reject) => {
+    const cmd = getCmd({ id: 'opencode' });
+    const child = spawnAgentCommand(cmd, args, WORKSPACE_CWD);
+    let buffer = '';
+    child.stdout.on('data', (data) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line);
+          if (event.type === 'text' && event.part?.text) {
+            finalText = event.part.text;
+            send({ type: 'replace_stream', clientId, content: finalText });
+          }
+          if (event.type === 'step_finish' && event.part?.tokens) {
+            usage = event.part.tokens;
+          }
+        } catch {}
       }
-    }
-    const statusJson = await requestJson(`${OPENCODE_BASE_URL}/session/status`).catch(() => null);
-    const statuses = statusJson?.value || statusJson?.data || statusJson || {};
-    const current = statuses[target];
-    if ((!current || current.status === 'idle' || current === 'idle') && (sawAssistant || i >= 3)) break;
+    });
+    child.stderr.on('data', (data) => {
+      const text = stripTerminalNoise(data.toString()).slice(0, 500);
+      if (text) send({ type: 'status', clientId, content: text });
+    });
+    child.on('error', reject);
+    const timer = setTimeout(() => { try { child.kill(); } catch {} reject(new Error('OpenCode prompt timed out')); }, 10 * 60 * 1000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(stripTerminalNoise(buffer).slice(-500) || `OpenCode exited ${code}`));
+    });
+  });
+
+  if (finalText) send({ type: 'replace_stream', clientId, content: finalText });
+  if (usage) {
+    const summary = usageSummary({ tokens: usage });
+    if (summary) send({ type: 'status', clientId, content: summary });
   }
-  const detail = await getOpenCodeSessionDetail(target).catch(() => null);
+  const detail = target ? await getOpenCodeSessionDetail(target).catch(() => null) : null;
   if (detail) send({ type: 'session_detail', clientId, detail });
   send({ type: 'done', clientId, content: '' });
 }
 
-function tomlString(value) {
-  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+// Devin CLI support
+
+function devinSessionDir() {
+  if (process.env.DEVIN_SESSION_DIR) return process.env.DEVIN_SESSION_DIR;
+  return path.join(os.homedir(), '.local', 'share', 'devin', 'sessions');
 }
 
-function codexExecArgs(prompt, sessionId) {
-  const model = getSelectedModel('codex');
-  const configArgs = model ? ['-c', `model=${tomlString(model)}`] : [];
-  if (sessionId) {
-    return ['exec', ...configArgs, 'resume', '--json', '--dangerously-bypass-approvals-and-sandbox', sessionId, prompt];
-  }
-  return ['exec', ...configArgs, '--json', '--dangerously-bypass-approvals-and-sandbox', prompt];
-}
-
-function formatCodexJsonEvent(ev) {
-  const payload = ev?.payload || {};
-  if (ev?.type === 'response_item') {
-    if (payload.type === 'message') {
-      const role = payload.role || 'assistant';
-      const text = stripTerminalNoise(extractTextParts(payload.content));
-      if (!text || isHiddenCodexText(text)) return null;
-      return role === 'assistant' ? { kind: 'stream', text } : null;
-    }
-    if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
-      const name = payload.name || payload.tool || payload.type || 'tool';
-      const command = name === 'shell_command' ? extractCommandFromArgs(payload.arguments || payload.input || '') : '';
-      return { kind: 'status', text: command ? `command: ${command}` : `tool: ${name}` };
-    }
-    if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
-      const text = stripTerminalNoise(payload.output || payload.stdout || '');
-      return text ? { kind: 'status', text: truncateText(text, 900) } : null;
-    }
-    if (/web_search|tool_search|browser|mcp/i.test(payload.type || '')) {
-      return { kind: 'status', text: `${payload.type}: ${summarizeToolPayload(payload, 700)}` };
-    }
-    if (payload.type === 'reasoning') return { kind: 'status', text: 'thinking...' };
-  }
-  if (ev?.type === 'event_msg') {
-    if (payload.type === 'agent_message') {
-      const text = stripTerminalNoise(payload.message || '');
-      return text && !isHiddenCodexText(text) ? { kind: 'stream', text } : null;
-    }
-    if (payload.type === 'task_started') return { kind: 'status', text: 'Codex started' };
-    if (payload.type === 'task_complete') return { kind: 'status', text: 'Codex finished' };
-    if (/tool|exec|browser|file|patch|command|web_search|mcp/i.test(payload.type || '')) {
-      return { kind: 'status', text: `${payload.type}: ${summarizeToolPayload(payload, 700)}` };
-    }
-  }
-  return null;
-}
-
-async function sendCodexAppPrompt(prompt, clientId, sessionId) {
-  await ensureCodexAppServer();
-
-  send({ type: 'status', clientId, content: `Opening Codex chat ${sessionId}` });
-  console.log(`  [codex-app] resume ${sessionId}`);
-  const resumed = await callCodexApp('thread/resume', { threadId: sessionId }, 60000);
-  const selectedModel = getSelectedModel('codex');
-  if (selectedModel) {
-    await callCodexApp('thread/settings/update', { threadId: sessionId, model: selectedModel }, 60000)
-      .catch((err) => console.warn(`  [codex-app] model update failed: ${err.message}`));
-  }
-  scheduleCodexDesktopRefreshBurst(sessionId, clientId);
-  const thread = resumed?.thread || {};
-  const turns = await listCodexAppTurns(sessionId, 12).catch(() => thread.turns || []);
-  const activeTurn = [...(turns || [])].reverse().find((turn) => turn?.status === 'inProgress' || turn?.status?.type === 'inProgress');
-  if (thread.status?.type === 'active' && activeTurn?.id) {
-    const existingTracker = activeCodexByThread.get(sessionId);
-    const tracker = attachCodexTrackerClient(existingTracker, clientId) || createCodexTracker(sessionId, clientId);
-    tracker.turnId = activeTurn.id;
-    activeCodexByThread.set(sessionId, tracker);
-    send({ type: 'status', clientId, content: `Steering active Codex turn ${activeTurn.id}` });
-    scheduleCodexDesktopRefreshBurst(sessionId, clientId);
-    console.log(`  [codex-app] steer ${sessionId} turn=${activeTurn.id}`);
-    try {
-      await callCodexApp('turn/steer', {
-        threadId: sessionId,
-        expectedTurnId: activeTurn.id,
-        input: [{ type: 'text', text: prompt, text_elements: [] }],
-      }, 60000);
-    } catch (err) {
-      const actualTurnId = String(err.message || '').match(/found `([^`]+)`/)?.[1];
-      if (!actualTurnId) throw err;
-      tracker.turnId = actualTurnId;
-      send({ type: 'status', clientId, content: `Steering current Codex turn ${actualTurnId}` });
-      console.log(`  [codex-app] steer retry ${sessionId} turn=${actualTurnId}`);
-      await callCodexApp('turn/steer', {
-        threadId: sessionId,
-        expectedTurnId: actualTurnId,
-        input: [{ type: 'text', text: prompt, text_elements: [] }],
-      }, 60000);
-    }
-    await tracker.completion;
-    const detail = await getCodexSessionDetail(sessionId).catch(() => null);
-    if (detail) send({ type: 'session_detail', clientId, detail });
-    scheduleCodexDesktopHardRefresh(sessionId, clientId);
-    send({ type: 'done', clientId, content: '' });
-    return;
-  }
-
-  send({ type: 'status', clientId, content: 'Starting Codex turn through app-server' });
-  console.log(`  [codex-app] turn/start ${sessionId}`);
-  const tracker = createCodexTracker(sessionId, clientId);
-  activeCodexByThread.set(sessionId, tracker);
-  scheduleCodexDesktopRefreshBurst(sessionId, clientId);
-
-  const started = await callCodexApp('turn/start', {
-    threadId: sessionId,
-    input: [{ type: 'text', text: prompt, text_elements: [] }],
-    ...(selectedModel ? { model: selectedModel } : {}),
-  }, 60000);
-  tracker.turnId = started?.turn?.id || tracker.turnId;
-
-  await tracker.completion;
-
-  const detail = await getCodexSessionDetail(sessionId).catch(() => null);
-  if (detail) send({ type: 'session_detail', clientId, detail });
-  scheduleCodexDesktopHardRefresh(sessionId, clientId);
-  send({ type: 'done', clientId, content: '' });
-}
-
-async function sendCodexPrompt(prompt, clientId, sessionId, attachments = []) {
-  if (!sessionId) {
-    throw new Error('Pick a Codex chat first. This build blocks accidental new Codex sessions from the phone.');
-  }
-  prompt = promptWithAttachments(prompt, attachments, clientId);
-  openCodexDesktopThread(sessionId, clientId);
-
+function parseDevinListJson(raw) {
   try {
-    await sendCodexAppPrompt(prompt, clientId, sessionId);
-    return;
-  } catch (err) {
-    activeCodexByThread.delete(sessionId);
-    if (process.env.AGENTHUB_CODEX_CLI_FALLBACK !== '1') {
-      throw err;
+    const parsed = JSON.parse(raw);
+    const items = responseItems(parsed);
+    return items.map((item) => {
+      const id = String(item.id || item.session_id || item.sessionId || item.sessionId || '');
+      const title = String(item.title || item.name || item.display_name || item.slug || id || 'Devin chat');
+      const directory = String(item.directory || item.path || item.cwd || item.workspace || item.working_directory || WORKSPACE_CWD);
+      const updatedAt = Number(item.updated_at || item.updatedAt || item.updated || item.time?.updated || item.last_active_at || 0);
+      const createdAt = Number(item.created_at || item.createdAt || item.created || item.time?.created || 0);
+      return {
+        agent: 'devin',
+        id,
+        title,
+        subtitle: directory,
+        directory,
+        updatedAt: updatedAt ? updatedAt * 1000 : Date.now(),
+        createdAt: createdAt ? createdAt * 1000 : Date.now(),
+      };
+    }).filter((s) => s.id);
+  } catch {
+    return [];
+  }
+}
+
+async function listDevinSessionsViaCli() {
+  const devin = AGENTS.find((a) => a.id === 'devin');
+  const cmd = devin ? getCmd(devin) : 'devin';
+  if (!commandExists(cmd)) return [];
+  return new Promise((resolve) => {
+    const child = spawnAgentCommand(cmd, ['list', '--format', 'json']);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', () => resolve([]));
+    child.on('close', () => {
+      const sessions = parseDevinListJson(stdout);
+      resolve(sessions);
+    });
+    setTimeout(() => { try { child.kill(); } catch {} resolve([]); }, 15000);
+  });
+}
+
+function scanDevinSessionDir() {
+  const dir = devinSessionDir();
+  if (!fs.existsSync(dir)) return [];
+  const sessions = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(dir, entry.name);
+    try {
+      const stat = fs.statSync(full);
+      sessions.push({
+        agent: 'devin',
+        id: entry.name,
+        title: entry.name,
+        subtitle: full,
+        directory: full,
+        updatedAt: stat.mtimeMs,
+        createdAt: stat.birthtimeMs || stat.ctimeMs,
+      });
+    } catch {}
+  }
+  return sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+async function listDevinSessions() {
+  try {
+    const viaCli = await listDevinSessionsViaCli();
+    if (viaCli.length) return viaCli;
+  } catch {}
+  return scanDevinSessionDir();
+}
+
+async function getMostRecentDevinSession() {
+  const sessions = await listDevinSessions();
+  const inCwd = sessions.filter((s) => !s.directory || s.directory === WORKSPACE_CWD || WORKSPACE_CWD.startsWith(s.directory));
+  return (inCwd.length ? inCwd : sessions).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null;
+}
+
+async function getDevinSessionDetail(sessionId) {
+  const sessions = await listDevinSessions();
+  const session = sessions.find((s) => s.id === sessionId);
+  return {
+    agent: 'devin',
+    sessionId,
+    title: session?.title || sessionId,
+    directory: session?.directory || WORKSPACE_CWD,
+    messages: [],
+    files: [],
+    commands: [],
+    tools: [],
+  };
+}
+
+function devinArgs(prompt, sessionId, model) {
+  const args = [];
+  if (model) args.push('--model', model);
+  args.push('--permission-mode', 'bypass');
+  if (sessionId) args.push('-r', sessionId);
+  args.push('-p', '--', prompt);
+  return args;
+}
+
+function numberFromUsage(obj, keys) {
+  for (const key of keys) {
+    const value = obj?.[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+function usageSummary(value) {
+  if (!value || typeof value !== 'object') return '';
+  const usage = value.usage || value.token_usage || value.tokens || value;
+  const input = numberFromUsage(usage, ['input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens']);
+  const output = numberFromUsage(usage, ['output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens']);
+  const cached = numberFromUsage(usage, ['cached_input_tokens', 'cachedInputTokens', 'cached_tokens', 'cachedTokens']);
+  const reasoning = numberFromUsage(usage, ['reasoning_tokens', 'reasoningTokens']);
+  const total = numberFromUsage(usage, ['total_tokens', 'totalTokens']) || input + output;
+  const parts = [];
+  if (total) parts.push(`total ${total}`);
+  if (input) parts.push(`in ${input}`);
+  if (output) parts.push(`out ${output}`);
+  if (cached) parts.push(`cached ${cached}`);
+  if (reasoning) parts.push(`reasoning ${reasoning}`);
+  return parts.length ? `tokens: ${parts.join(' | ')}` : '';
+}
+
+async function sendDevinPrompt(prompt, clientId, sessionId, attachments = []) {
+  prompt = promptWithAttachments(prompt, attachments, clientId);
+  prompt = `Use web search when helpful. ${prompt}`;
+  const devin = AGENTS.find((a) => a.id === 'devin');
+  const cmd = devin ? getCmd(devin) : 'devin';
+  if (!commandExists(cmd)) throw new Error('Devin CLI not found on PATH.');
+
+  let target = sessionId;
+  if (!target) {
+    const recent = await getMostRecentDevinSession();
+    if (recent) {
+      target = recent.id;
+      send({ type: 'status', clientId, content: `Using most recent Devin chat: ${recent.title || target}` });
     }
-    send({ type: 'status', clientId, content: `Codex app-server failed, falling back to CLI resume: ${err.message}` });
+  }
+  if (target) {
+    send({ type: 'status', clientId, content: `Sending to Devin session ${target}` });
+  } else {
+    send({ type: 'status', clientId, content: 'Starting new Devin session' });
   }
 
-  const a = AGENTS.find((x) => x.id === 'codex');
-  const cmd = getCmd(a);
-  if (!commandExists(cmd)) throw new Error('Codex CLI not found on PATH.');
-  const args = codexExecArgs(prompt, sessionId);
-  console.log(`  [codex-json] resume ${sessionId}`);
-  const before = await getCodexSessionDetail(sessionId).catch(() => null);
-  const beforeCount = before?.messages?.length || 0;
-  send({ type: 'status', clientId, content: `Sending to Codex chat ${sessionId}` });
-  send({ type: 'status', clientId, content: 'Codex is running via resume; it will not type into the visible desktop composer.' });
+  const model = getSelectedModel('devin');
+  const args = devinArgs(prompt, target, model);
+  console.log(`  [devin] $ ${cmd} ${args.join(' ')}`);
 
   await new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawnCodexCommand(args);
+      child = spawnAgentCommand(cmd, args);
     } catch (err) {
       reject(err);
       return;
     }
-
-    let buffer = '';
-    let fullText = '';
-    let done = false;
-    let sawEvent = false;
-    let firstEventTimer = null;
-
-    function consume(data) {
+    let fullOutput = '';
+    child.stdout.on('data', (data) => {
       const text = data.toString();
-      fullText += text;
-      buffer += text;
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const ev = readJsonLine(line);
-        if (!ev) continue;
-        sawEvent = true;
-        if (firstEventTimer) {
-          clearTimeout(firstEventTimer);
-          firstEventTimer = null;
-        }
-        const formatted = formatCodexJsonEvent(ev);
-        if (!formatted) continue;
-        if (formatted.kind === 'stream') send({ type: 'replace_stream', clientId, content: formatted.text });
-        else send({ type: 'status', clientId, content: formatted.text });
-      }
-    }
-
-    child.stdout.on('data', consume);
-    child.stderr.on('data', consume);
+      fullOutput += text;
+      send({ type: 'replace_stream', clientId, content: stripTerminalNoise(fullOutput) });
+    });
+    child.stderr.on('data', (data) => {
+      const text = data.toString();
+      fullOutput += text;
+      send({ type: 'status', clientId, content: stripTerminalNoise(text).slice(0, 500) });
+    });
     child.on('error', reject);
     child.on('close', (code) => {
-      if (done) return;
-      done = true;
       if (code === 0) resolve();
-      else reject(new Error(stripTerminalNoise(fullText).slice(-1200) || `Codex exited ${code}`));
+      else reject(new Error(stripTerminalNoise(fullOutput).slice(-1200) || `Devin exited ${code}`));
     });
-
-    firstEventTimer = setTimeout(() => {
-      if (done || sawEvent) return;
-      done = true;
-      try { child.kill(); } catch {}
-      reject(new Error('Codex did not emit any resume events in 45 seconds. This usually means that chat is currently active/locked in Codex Desktop; pick an inactive chat or start a dedicated phone chat.'));
-    }, 45 * 1000);
-
     setTimeout(() => {
-      if (done) return;
-      done = true;
       try { child.kill(); } catch {}
-      reject(new Error('Codex timed out after 3 minutes.'));
-    }, 3 * 60 * 1000);
+      reject(new Error('Devin timed out after 10 minutes.'));
+    }, 10 * 60 * 1000);
   });
 
-  const detail = await getCodexSessionDetail(sessionId).catch(() => null);
+  const detail = target ? await getDevinSessionDetail(target).catch(() => null) : null;
   if (detail) send({ type: 'session_detail', clientId, detail });
-  if (detail && (detail.messages?.length || 0) <= beforeCount) {
-    send({ type: 'status', clientId, content: 'Codex finished but no new assistant message appeared in the session log.' });
-  }
   send({ type: 'done', clientId, content: '' });
+}
+
+async function listLocalSessions(agent) {
+  const opencodeSessions = agent && agent !== 'opencode' ? [] : await listOpenCodeSessions();
+  const devinSessions = agent && agent !== 'devin' ? [] : await listDevinSessions();
+  return [...opencodeSessions, ...devinSessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 function printAgentQRCodes(code) {
@@ -1636,7 +944,7 @@ function printAgentQRCodes(code) {
 
   if (agents.length === 0) {
     console.log('Warning: No agents detected.');
-    console.log('   Install and sign in to Codex or OpenCode.\n');
+    console.log('   Install and sign in to OpenCode or Devin.\n');
   }
 
   try {
@@ -1661,8 +969,8 @@ function startPtyAgent(agent, prompt, clientId, sessionId = '') {
 
   const cmd = getCmd(a);
   if (!commandExists(cmd)) throw new Error(`${a.name} CLI not found on PATH.`);
-  const args = (PTY_AGENT_ARGS[agent] || ((p) => a.args(p)))(prompt, sessionId);
-  const launch = buildPtyAgentLaunch(agent, cmd, args);
+  const args = a.args(prompt, sessionId);
+  const launch = buildPtyCommand(cmd, args);
   const id = sessionKey(agent, sessionId);
   console.log(`  [pty] ${a.name} cwd=${WORKSPACE_CWD}`);
   console.log(`  [pty] $ ${launch.command} ${launch.args.join(' ')}`);
@@ -1735,6 +1043,7 @@ function executeAgent(agent, prompt, clientId, sessionId = '', attachments = [])
     const a = AGENTS.find(x => x.id === agent);
     if (!a) { send({ type: 'error', clientId, content: `Unknown agent: ${agent}` }); resolve(); return; }
     if (!a.localPromptCli) { send({ type: 'error', clientId, content: `${a.name} is installed as an editor launcher, not a promptable local agent CLI.` }); resolve(); return; }
+
     if (a.serverBacked) {
       try {
         await sendOpenCodePrompt(prompt, clientId, sessionId, attachments);
@@ -1745,11 +1054,11 @@ function executeAgent(agent, prompt, clientId, sessionId = '', attachments = [])
       return;
     }
 
-    if (agent === 'codex') {
+    if (agent === 'devin') {
       try {
-        await sendCodexPrompt(prompt, clientId, sessionId, attachments);
+        await sendDevinPrompt(prompt, clientId, sessionId, attachments);
       } catch (err) {
-        send({ type: 'error', clientId, content: `Codex failed: ${err.message}` });
+        send({ type: 'error', clientId, content: `Devin failed: ${err.message}` });
       }
       resolve();
       return;
@@ -1766,7 +1075,7 @@ function executeAgent(agent, prompt, clientId, sessionId = '', attachments = [])
     }
 
     const cmd = getCmd(a);
-    const args = a.args(prompt);
+    const args = a.args(prompt, sessionId);
     console.log(`  $ ${cmd} ${args.join(' ')}`);
     send({ type: 'status', clientId, content: ` ${a.name} running...`.trim() });
 
@@ -1778,33 +1087,12 @@ function executeAgent(agent, prompt, clientId, sessionId = '', attachments = [])
       resolve();
       return;
     }
-    let doneSent = false, fullOutput = '', jsonBuffer = '';
+    let doneSent = false, fullOutput = '';
 
     function handleData(data) {
       const text = data.toString();
       fullOutput += text;
-
-      if (agent === 'opencode') {
-        jsonBuffer += text;
-        const lines = jsonBuffer.split('\n');
-        jsonBuffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const ev = JSON.parse(line);
-            if (ev.type === 'content' && ev.content) {
-              send({ type: 'replace_stream', clientId, content: ev.content });
-            }
-          } catch {
-            // Skip non-JSON lines (progress spinners, status, etc.)
-          }
-        }
-      } else if (agent === 'codex') {
-        // Codex output is mostly AI text. Forward cleanly, strip ANSI.
-        send({ type: 'stream', clientId, content: text });
-      } else {
-        send({ type: 'stream', clientId, content: text });
-      }
+      send({ type: 'stream', clientId, content: text });
     }
 
     child.stdout.on('data', handleData);
@@ -1828,7 +1116,7 @@ const agents = getAvailableAgents();
 console.log(`  Agents:   ${agents.length ? agents.map(a => a.name).join(', ') : 'none'}`);
 console.log(`  Server:   ${SERVER_URL}`);
 console.log(`  Cwd:      ${WORKSPACE_CWD}`);
-console.log(`  Mode:     Codex app-server + OpenCode session server${pty ? ' + PTY fallback' : ''}`);
+console.log(`  Mode:     OpenCode session server + Devin CLI${pty ? ' + PTY fallback' : ''}`);
 console.log('=======================================\n');
 
 connect();
@@ -1843,4 +1131,3 @@ process.on('SIGINT', () => {
   if (ws) ws.close();
   process.exit(0);
 });
-

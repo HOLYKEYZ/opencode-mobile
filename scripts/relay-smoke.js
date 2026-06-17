@@ -12,8 +12,11 @@ const serverUrl = process.env.SERVER_URL || process.argv[2] || 'wss://agent-hub-
 const relayCode = process.env.RELAY_CODE || process.argv[3] || '';
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS || 45000);
 const executeOpenCode = process.env.SMOKE_EXECUTE_OPENCODE === '1' || process.argv.includes('--execute-opencode');
+const executeDevin = process.env.SMOKE_EXECUTE_DEVIN === '1' || process.argv.includes('--execute-devin');
 const openCodeExpected = process.env.SMOKE_OPENCODE_EXPECT || 'AGENTHUB_SMOKE_OK';
 const openCodePrompt = process.env.SMOKE_OPENCODE_PROMPT || `Agent Hub relay smoke test: reply with exactly ${openCodeExpected}.`;
+const devinExpected = process.env.SMOKE_DEVIN_EXPECT || 'AGENTHUB_SMOKE_OK';
+const devinPrompt = process.env.SMOKE_DEVIN_PROMPT || `Agent Hub relay smoke test: reply with exactly ${devinExpected}.`;
 const attachSmokeFile = process.env.SMOKE_ATTACH_FILE === '1' || process.argv.includes('--attach-file');
 const attachmentText = process.env.SMOKE_ATTACHMENT_TEXT || `Agent Hub smoke attachment ${openCodeExpected}`;
 
@@ -45,10 +48,12 @@ function connectPhone(label) {
     const state = {
       joined: null,
       sessions: null,
-      selectedCodex: null,
-      codexDetail: null,
-      opencodeSessions: null,
-      opencodeExecution: executeOpenCode ? { selected: null, statuses: [], output: '', done: false, attachmentSaved: false } : null,
+      selectedOpenCode: null,
+      openCodeDetail: null,
+      selectedDevin: null,
+      devinDetail: null,
+      openCodeExecution: executeOpenCode ? { selected: null, statuses: [], output: '', done: false, attachmentSaved: false } : null,
+      devinExecution: executeDevin ? { selected: null, statuses: [], output: '', done: false } : null,
     };
 
     function send(payload) {
@@ -79,67 +84,104 @@ function connectPhone(label) {
 
       if (msg.type === 'sessions' && !state.sessions) {
         const sessions = msg.sessions || [];
-        const codex = sessions.find((session) => session.agent === 'codex' && session.id);
-        if (!codex) return;
         state.sessions = sessions;
-        state.selectedCodex = { id: codex.id, title: codex.title };
-        send({ type: 'session_detail', agent: 'codex', sessionId: codex.id });
+
+        const openCode = sessions
+          .filter((session) => session.agent === 'opencode' && session.id)
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+        if (openCode) {
+          state.selectedOpenCode = { id: openCode.id, title: openCode.title };
+          send({ type: 'session_detail', agent: 'opencode', sessionId: openCode.id });
+        }
+
+        const devin = sessions
+          .filter((session) => session.agent === 'devin' && session.id)
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+        if (devin) {
+          state.selectedDevin = { id: devin.id, title: devin.title };
+          if (!openCode) send({ type: 'session_detail', agent: 'devin', sessionId: devin.id });
+        }
+
+        if (!openCode && !devin) {
+          try { ws.close(1000, 'smoke done'); } catch {}
+          resolve(state);
+        }
         return;
       }
 
-      if (msg.type === 'session_detail' && msg.detail?.agent === 'codex' && !state.codexDetail) {
+      if (msg.type === 'session_detail' && msg.detail?.agent === 'opencode' && !state.openCodeDetail) {
         const detail = msg.detail;
-        if (detail.sessionId !== state.selectedCodex?.id) return;
-        const hasUsableDetail = Array.isArray(detail.messages) && detail.messages.length > 0 && detail.metadataScope === 'latest_turn';
+        if (detail.sessionId !== state.selectedOpenCode?.id) return;
+        const hasUsableDetail = Array.isArray(detail.messages);
         if (!hasUsableDetail) return;
-        state.codexDetail = detail;
-        send({ type: 'session_list', agent: 'opencode' });
-        return;
-      }
-
-      if (msg.type === 'sessions' && state.sessions && state.codexDetail && !state.opencodeSessions) {
-        const opencodeSessions = (msg.sessions || []).filter((session) => session.agent === 'opencode' && session.id);
-        if (opencodeSessions.length === 0) return;
-        state.opencodeSessions = opencodeSessions;
-        if (!executeOpenCode) {
+        state.openCodeDetail = detail;
+        if (!executeOpenCode && !executeDevin) {
           try { ws.close(1000, 'smoke done'); } catch {}
           resolve(state);
           return;
         }
-        const selected = state.opencodeSessions.find((session) => session.agent === 'opencode' && session.id);
-        if (!selected) {
-          reject(new Error('No OpenCode session available for execute smoke'));
-          try { ws.close(); } catch {}
-          return;
+        if (executeOpenCode) {
+          state.openCodeExecution.selected = state.selectedOpenCode;
+          const payload = { agent: 'opencode', sessionId: state.selectedOpenCode.id, prompt: openCodePrompt };
+          if (attachSmokeFile) {
+            const data = Buffer.from(attachmentText, 'utf8');
+            payload.attachments = [{
+              name: 'agenthub-smoke.txt',
+              mime: 'text/plain',
+              base64: data.toString('base64'),
+              size: data.length,
+            }];
+          }
+          send(payload);
+        } else if (executeDevin && state.selectedDevin) {
+          send({ type: 'session_detail', agent: 'devin', sessionId: state.selectedDevin.id });
         }
-        state.opencodeExecution.selected = { id: selected.id, title: selected.title };
-        const payload = { agent: 'opencode', sessionId: selected.id, prompt: openCodePrompt };
-        if (attachSmokeFile) {
-          const data = Buffer.from(attachmentText, 'utf8');
-          payload.attachments = [{
-            name: 'agenthub-smoke.txt',
-            mime: 'text/plain',
-            base64: data.toString('base64'),
-            size: data.length,
-          }];
+        return;
+      }
+
+      if (msg.type === 'session_detail' && msg.detail?.agent === 'devin' && !state.devinDetail) {
+        state.devinDetail = msg.detail;
+        if (executeDevin && !executeOpenCode) {
+          state.devinExecution.selected = state.selectedDevin;
+          send({ agent: 'devin', sessionId: state.selectedDevin.id, prompt: devinPrompt });
         }
-        send(payload);
         return;
       }
 
       if (executeOpenCode && msg.type === 'status') {
-        state.opencodeExecution?.statuses.push(msg.content || '');
-        if (msg.content?.startsWith('file: saved upload ')) state.opencodeExecution.attachmentSaved = true;
+        state.openCodeExecution?.statuses.push(msg.content || '');
+        if (msg.content?.startsWith('file: saved upload ')) state.openCodeExecution.attachmentSaved = true;
         return;
       }
 
       if (executeOpenCode && (msg.type === 'stream' || msg.type === 'replace_stream')) {
-        if (msg.content) state.opencodeExecution.output = msg.content;
+        if (msg.content) state.openCodeExecution.output = msg.content;
         return;
       }
 
       if (executeOpenCode && msg.type === 'done') {
-        state.opencodeExecution.done = true;
+        state.openCodeExecution.done = true;
+        if (!executeDevin) {
+          try { ws.close(1000, 'smoke done'); } catch {}
+          resolve(state);
+        } else if (state.selectedDevin) {
+          send({ type: 'session_detail', agent: 'devin', sessionId: state.selectedDevin.id });
+        }
+        return;
+      }
+
+      if (executeDevin && msg.type === 'status') {
+        state.devinExecution?.statuses.push(msg.content || '');
+        return;
+      }
+
+      if (executeDevin && (msg.type === 'stream' || msg.type === 'replace_stream')) {
+        if (msg.content) state.devinExecution.output = msg.content;
+        return;
+      }
+
+      if (executeDevin && msg.type === 'done') {
+        state.devinExecution.done = true;
         try { ws.close(1000, 'smoke done'); } catch {}
         resolve(state);
       }
@@ -153,28 +195,33 @@ function summarize(result) {
     acc[session.agent] = (acc[session.agent] || 0) + 1;
     return acc;
   }, {});
-  const detail = result.codexDetail || {};
+  const openCodeDetail = result.openCodeDetail || {};
+  const devinDetail = result.devinDetail || {};
   return {
     relayOnline: !!result.joined?.relay_online,
     agents: result.joined?.available_agents || [],
     totalSessions: sessions.length,
     counts,
-    selectedCodex: result.selectedCodex,
-    opencodeSessions: result.opencodeSessions?.length || 0,
-    codexDetail: {
-      status: detail.status || '',
-      messages: Array.isArray(detail.messages) ? detail.messages.length : 0,
-      metadataScope: detail.metadataScope || '',
-      commands: Array.isArray(detail.commands) ? detail.commands.length : 0,
-      tools: Array.isArray(detail.tools) ? detail.tools.length : 0,
-      files: Array.isArray(detail.files) ? detail.files.length : 0,
+    selectedOpenCode: result.selectedOpenCode,
+    selectedDevin: result.selectedDevin,
+    openCodeDetail: {
+      messages: Array.isArray(openCodeDetail.messages) ? openCodeDetail.messages.length : 0,
     },
-    opencodeExecution: result.opencodeExecution ? {
-      selected: result.opencodeExecution.selected,
-      statusCount: result.opencodeExecution.statuses.length,
-      done: result.opencodeExecution.done,
-      output: result.opencodeExecution.output,
-      attachmentSaved: result.opencodeExecution.attachmentSaved,
+    devinDetail: {
+      sessionId: devinDetail.sessionId || '',
+    },
+    openCodeExecution: result.openCodeExecution ? {
+      selected: result.openCodeExecution.selected,
+      statusCount: result.openCodeExecution.statuses.length,
+      done: result.openCodeExecution.done,
+      output: result.openCodeExecution.output,
+      attachmentSaved: result.openCodeExecution.attachmentSaved,
+    } : null,
+    devinExecution: result.devinExecution ? {
+      selected: result.devinExecution.selected,
+      statusCount: result.devinExecution.statuses.length,
+      done: result.devinExecution.done,
+      output: result.devinExecution.output,
     } : null,
   };
 }
@@ -188,26 +235,33 @@ function summarize(result) {
   const failures = [];
   for (const [label, summary] of [['first', firstSummary], ['reconnect', secondSummary]]) {
     if (!summary.relayOnline) failures.push(`${label}: relay not online`);
-    if (!summary.agents.includes('codex')) failures.push(`${label}: codex missing`);
     if (!summary.agents.includes('opencode')) failures.push(`${label}: opencode missing`);
+    if (!summary.agents.includes('devin')) failures.push(`${label}: devin missing`);
     if (summary.totalSessions < 1) failures.push(`${label}: no sessions returned`);
-    if ((summary.counts.codex || 0) < 1) failures.push(`${label}: no Codex sessions`);
-    if (summary.opencodeSessions < 1) failures.push(`${label}: no OpenCode sessions`);
-    if (summary.codexDetail.messages < 1) failures.push(`${label}: Codex detail has no messages`);
-    if (summary.codexDetail.metadataScope !== 'latest_turn') failures.push(`${label}: Codex metadata is not latest_turn`);
+    if ((summary.counts.opencode || 0) < 1) failures.push(`${label}: no OpenCode sessions`);
+    if ((summary.counts.devin || 0) < 1) failures.push(`${label}: no Devin sessions`);
+    if (!summary.selectedOpenCode?.id) failures.push(`${label}: no recent OpenCode chat selected`);
+    if (summary.openCodeDetail.messages < 1) failures.push(`${label}: OpenCode detail has no messages`);
     if (executeOpenCode) {
-      if (!summary.opencodeExecution?.selected?.id) failures.push(`${label}: no OpenCode execution target`);
-      if (!summary.opencodeExecution?.done) failures.push(`${label}: OpenCode execution did not finish`);
-      if (!summary.opencodeExecution?.output?.includes(openCodeExpected)) {
+      if (!summary.openCodeExecution?.selected?.id) failures.push(`${label}: no OpenCode execution target`);
+      if (!summary.openCodeExecution?.done) failures.push(`${label}: OpenCode execution did not finish`);
+      if (!summary.openCodeExecution?.output?.includes(openCodeExpected)) {
         failures.push(`${label}: OpenCode output did not include ${openCodeExpected}`);
       }
-      if (attachSmokeFile && !summary.opencodeExecution?.attachmentSaved) {
+      if (attachSmokeFile && !summary.openCodeExecution?.attachmentSaved) {
         failures.push(`${label}: relay did not report saved attachment`);
+      }
+    }
+    if (executeDevin) {
+      if (!summary.devinExecution?.selected?.id) failures.push(`${label}: no Devin execution target`);
+      if (!summary.devinExecution?.done) failures.push(`${label}: Devin execution did not finish`);
+      if (!summary.devinExecution?.output?.includes(devinExpected)) {
+        failures.push(`${label}: Devin output did not include ${devinExpected}`);
       }
     }
   }
 
-  console.log(JSON.stringify({ serverUrl, relayCode, executeOpenCode, attachSmokeFile, first: firstSummary, reconnect: secondSummary }, null, 2));
+  console.log(JSON.stringify({ serverUrl, relayCode, executeOpenCode, executeDevin, attachSmokeFile, first: firstSummary, reconnect: secondSummary }, null, 2));
   if (failures.length) {
     console.error(`Relay smoke failed:\n- ${failures.join('\n- ')}`);
     process.exit(1);

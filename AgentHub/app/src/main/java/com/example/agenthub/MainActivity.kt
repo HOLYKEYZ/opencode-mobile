@@ -18,14 +18,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,22 +42,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
-import com.example.agenthub.theme.AgentHubTheme
+import com.example.agenthub.theme.*
 import okhttp3.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,7 +63,7 @@ data class LogLine(val id: Long, val text: String, val type: String = "append")
 data class RemoteSession(val agent: String, val id: String, val title: String, val subtitle: String, val updatedAt: Long = 0)
 data class PendingAttachment(val name: String, val mime: String, val base64: String, val size: Int)
 
-val AGENT_NAMES = mapOf("codex" to "Codex", "opencode" to "OpenCode", "system" to "system")
+val AGENT_NAMES = mapOf("opencode" to "OpenCode", "devin" to "Devin", "system" to "system")
 const val MAX_DETAIL_MESSAGES_ON_PHONE = 40
 const val MAX_DETAIL_MESSAGE_CHARS = 3000
 const val MAX_DETAIL_TOTAL_CHARS = 60000
@@ -118,7 +115,7 @@ class MainActivity : ComponentActivity() {
         deepLinkState.value = intent?.data?.toString() ?: ""
         setContent {
             AgentHubTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0A0A0C)) {
+                Surface(modifier = Modifier.fillMaxSize(), color = OpenCodeBlack) {
                     AgentHubScreen(initialDeepLink = deepLinkState.value)
                 }
             }
@@ -134,13 +131,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CrashFallback(message: String) {
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0A0A0C)).padding(24.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxSize().background(OpenCodeBlack).padding(24.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Agent Hub hit an error", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("OC-mob hit an error", color = OpenCodeTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(message, color = Color(0xFFEF4444), fontSize = 13.sp)
             Spacer(Modifier.height(16.dp))
-            Text("Close and reopen the app, then use Settings to reconnect.", color = Color(0xFF888888), fontSize = 13.sp)
+            Text("Close and reopen the app, then use Settings to reconnect.", color = OpenCodeTextSecondary, fontSize = 13.sp)
         }
     }
 }
@@ -157,7 +154,7 @@ object OkHttpAgent {
 fun AgentHubScreen(initialDeepLink: String = "") {
     val context = LocalContext.current
     val rootView = LocalView.current
-    val prefs = remember { context.getSharedPreferences("AgentHubPrefs", Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences("OCmobPrefs", Context.MODE_PRIVATE) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     DisposableEffect(rootView, context) {
@@ -183,17 +180,17 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     var wsStatus by remember { mutableStateOf("connecting") }
     var webSocket by remember { mutableStateOf<WebSocket?>(null) }
     var showSettings by remember { mutableStateOf(false) }
-    var showChats by remember { mutableStateOf(prefs.getBoolean("SHOW_CHATS", true)) }
     var showQrScanner by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var relayOnline by remember { mutableStateOf(false) }
-    var currentAgent by remember { mutableStateOf(prefs.getString("CURRENT_AGENT", "") ?: "") }
+    var currentAgent by remember { mutableStateOf(prefs.getString("CURRENT_AGENT", "opencode") ?: "opencode") }
     var availableAgents by remember { mutableStateOf(listOf<String>()) }
     var sessions by remember { mutableStateOf(parseRemoteSessions(prefs.getString("LAST_SESSIONS", "") ?: "")) }
     var sessionsLoading by remember { mutableStateOf(false) }
     var sessionsNotice by remember { mutableStateOf("") }
     var selectedSessionId by remember { mutableStateOf(prefs.getString("SELECTED_SESSION_ID", "") ?: "") }
     var selectedSessionTitle by remember { mutableStateOf(prefs.getString("SELECTED_SESSION_TITLE", "") ?: "") }
+    var selectedSessionSubtitle by remember { mutableStateOf("") }
     var agentModels by remember { mutableStateOf(listOf<String>()) }
     var currentModel by remember { mutableStateOf("") }
     var tokenUsage by remember { mutableStateOf(prefs.getString("TOKEN_USAGE", "") ?: "") }
@@ -205,12 +202,15 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     var lastConnectAttemptAt by remember { mutableStateOf(0L) }
     var showTechnicalEvents by remember { mutableStateOf(prefs.getBoolean("SHOW_TECHNICAL_EVENTS", false)) }
     var stickToBottom by remember { mutableStateOf(true) }
+    var viewMode by remember { mutableStateOf("list") } // "list" or "chat"
 
     var sessionCode by remember { mutableStateOf(prefs.getString("SESSION_CODE", "") ?: "") }
-    var serverUrl by remember { mutableStateOf(prefs.getString("SERVER_URL", "wss://agent-hub-backend-wk48.onrender.com") ?: "") }
+    var serverUrl by remember { mutableStateOf(prefs.getString("SERVER_URL", "wss://agent-hub-backend-wk48.onrender.com") ?: "wss://agent-hub-backend-wk48.onrender.com") }
 
-    val agentName = AGENT_NAMES[currentAgent] ?: "Agent"
+    val agentName = AGENT_NAMES[currentAgent] ?: currentAgent
     val scrollScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -272,7 +272,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Prompt ${AGENT_NAMES[currentAgent] ?: "agent"}")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Prompt $agentName")
         }
         try {
             speechLauncher.launch(intent)
@@ -324,17 +324,9 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         }
     }
 
-    fun consolidatedLogs(): List<LogLine> {
-        return consolidateLogs(logs)
-    }
-
-    fun visibleTranscript(): String {
-        return visibleTranscriptFrom(logs)
-    }
-
-    fun appendLog(line: LogLine) {
-        logs = appendBoundedLog(logs, line)
-    }
+    fun consolidatedLogs(): List<LogLine> = consolidateLogs(logs)
+    fun visibleTranscript(): String = visibleTranscriptFrom(logs)
+    fun appendLog(line: LogLine) { logs = appendBoundedLog(logs, line) }
 
     fun statusLogType(text: String): String {
         val value = text.trim()
@@ -349,9 +341,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         }
     }
 
-    fun afterPrefix(raw: String): String {
-        return raw.substringAfter(':', raw).trim()
-    }
+    fun afterPrefix(raw: String): String = raw.substringAfter(':', raw).trim()
 
     fun compactPathList(raw: String): String {
         val items = raw.lines()
@@ -411,12 +401,11 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                 if (files.isBlank()) "Editing files" else "Files: $files"
             }
             lower.startsWith("thinking") -> "Thinking"
-            lower.startsWith("opening codex chat") -> "Opening selected Codex chat"
-            lower.startsWith("starting codex turn") -> "Starting Codex turn"
-            lower.startsWith("steering active codex turn") -> "Steering active Codex turn"
-            lower.startsWith("sending to codex chat") -> "Sending to selected Codex chat"
             lower.startsWith("sending to opencode session") -> "Sending to selected OpenCode session"
             lower.startsWith("opencode accepted prompt") -> "OpenCode accepted prompt"
+            lower.startsWith("using most recent") -> "Using most recent chat"
+            lower.startsWith("created new opencode session") -> "Created new OpenCode session"
+            lower.startsWith("starting new") -> "Starting new session"
             else -> raw
         } ?: return null
         return LogLine(System.currentTimeMillis(), summary, type)
@@ -442,17 +431,17 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         val text = visibleTranscript()
         if (text.isBlank()) return
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Agent Hub transcript", text))
+        clipboard.setPrimaryClip(ClipData.newPlainText("OC-mob transcript", text))
         logs = logs + LogLine(System.currentTimeMillis(), "Copied visible transcript")
     }
 
     fun compactLocalPaths(text: String): String {
-        return text.replace(Regex("[A-Za-z]:\\\\(?:[^\\\\\\n]+\\\\)+([^\\\\\\n)]+)")) {
+        return text.replace(Regex("[A-Za-z]:\\\\\\\\(?:[^\\\\\\\\n]+\\\\\\\\)+([^\\\\\\\\n)]+)")) {
             it.groupValues[1]
         }
     }
 
-    fun hideCodexAppDirectives(text: String): String {
+    fun hideAgentDirectives(text: String): String {
         return text.lines()
             .filterNot { line ->
                 val trimmed = line.trim()
@@ -463,13 +452,13 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     }
 
     fun compactChatText(text: String): String {
-        val cleaned = hideCodexAppDirectives(compactLocalPaths(stripAnsi(text).trim()))
+        val cleaned = hideAgentDirectives(compactLocalPaths(stripAnsi(text).trim()))
         val looksLikeTerminalPaste = cleaned.contains("Windows PowerShell") ||
             cleaned.contains("node relay.js") ||
             cleaned.contains("════════") ||
             cleaned.contains("Relay session:")
         if (looksLikeTerminalPaste && cleaned.length > 1200) {
-            return "[long terminal paste hidden in chat view; use the Codex desktop chat for the original paste]"
+            return "[long terminal paste hidden in chat view; see the desktop agent chat for the original paste]"
         }
         if (cleaned.length <= MAX_DETAIL_MESSAGE_CHARS) return cleaned
         return cleaned.take(MAX_DETAIL_MESSAGE_CHARS) + "\n\n[message truncated on phone]"
@@ -499,8 +488,17 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         return out
     }
 
-    val listState = rememberLazyListState()
-    val lifecycleOwner = LocalLifecycleOwner.current
+    fun formatRelativeTime(updatedAt: Long): String {
+        if (updatedAt <= 0) return ""
+        val diff = System.currentTimeMillis() - updatedAt
+        return when {
+            diff < 60_000 -> "now"
+            diff < 3_600_000 -> "${diff / 60_000}m"
+            diff < 86_400_000 -> "${diff / 3_600_000}h"
+            diff < 604_800_000 -> "${diff / 86_400_000}d"
+            else -> "${diff / 604_800_000}w"
+        }
+    }
 
     val connectWs = connectWs@{ urlOverride: String?, codeOverride: String? ->
         val targetServerUrl = (urlOverride ?: serverUrl).trim()
@@ -570,38 +568,20 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 if (relayOnline) {
                                     mainHandler.postDelayed({
                                         onUi {
-                                            if (seq == connectionSeq && relayOnline) {
-                                                requestSessions("", webSocket)
-                                            }
+                                            if (seq == connectionSeq && relayOnline) requestSessions("", webSocket)
                                         }
                                     }, 600)
-                                    mainHandler.postDelayed({
-                                        onUi {
-                                            if (seq == connectionSeq && relayOnline && sessions.isEmpty()) {
-                                                requestSessions("", webSocket)
-                                            }
-                                        }
-                                    }, 2400)
-                                    mainHandler.postDelayed({
-                                        onUi {
-                                            if (seq == connectionSeq && relayOnline && sessions.isEmpty()) {
-                                                sessionsLoading = false
-                                                sessionsNotice = "No chats received yet. Tap refresh or restart the relay."
-                                            }
-                                        }
-                                    }, 7000)
-                                    if (selectedSessionId.isNotBlank() && currentAgent.isNotBlank()) {
-                                        requestSessionDetail(RemoteSession(currentAgent, selectedSessionId, selectedSessionTitle, ""), ws)
-                                    }
                                 }
                             }
                             "sessions" -> {
-                                sessions = parseSessions(json.optJSONArray("sessions") ?: JSONArray())
+                                val rawArr = json.optJSONArray("sessions") ?: JSONArray()
+                                sessions = parseSessions(rawArr)
                                 sessionsLoading = false
-                                sessionsNotice = if (sessions.isEmpty()) "No saved Codex/OpenCode chats found." else ""
+                                sessionsNotice = if (sessions.isEmpty()) "No saved chats found." else ""
                                 prefs.edit().putString("LAST_SESSIONS", remoteSessionsToJson(sessions.take(200))).apply()
                                 sessions.firstOrNull { it.id == selectedSessionId }?.let {
                                     selectedSessionTitle = it.title
+                                    selectedSessionSubtitle = it.subtitle
                                     prefs.edit().putString("SELECTED_SESSION_TITLE", it.title).apply()
                                 }
                             }
@@ -610,7 +590,10 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 val messages = detail?.optJSONArray("messages")
                                 val chatLogs = detailMessageLogs(messages)
                                 val extras = if (showTechnicalEvents) detailExtraLogs(detail, System.currentTimeMillis() + 10000) else emptyList()
-                                if (chatLogs.isNotEmpty() || extras.isNotEmpty()) logs = chatLogs + extras
+                                if (chatLogs.isNotEmpty() || extras.isNotEmpty()) {
+                                    logs = chatLogs + extras
+                                    viewMode = "chat"
+                                }
                                 val detailActive = detail?.optString("status") == "active"
                                 promptRunning = detailActive || promptInFlight
                             }
@@ -636,9 +619,9 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                     tokenUsage = content.trim()
                                     prefs.edit().putString("TOKEN_USAGE", tokenUsage).apply()
                                 }
-                                if (lower.contains("starting") || lower.contains("steering") || lower.contains("working") || lower.contains("codex started")) {
+                                if (lower.contains("starting") || lower.contains("steering") || lower.contains("working") || lower.contains("accepted prompt") || lower.contains("devin") || lower.contains("opencode")) {
                                     promptRunning = true
-                                } else if (lower.contains("finished") || lower.contains("completed") || lower.contains("exited")) {
+                                } else if (lower.contains("finished") || lower.contains("completed") || lower.contains("exited") || lower.contains("done")) {
                                     if (!promptInFlight) promptRunning = false
                                 }
                                 statusForPhone(content)?.let { appendLog(it) }
@@ -647,7 +630,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                                 promptInFlight = false
                                 promptRunning = false
                                 val c = json.optString("content"); if (c.isNotBlank()) logs = logs + LogLine(System.currentTimeMillis(), c)
-                                if (relayOnline && showChats) requestSessions("", webSocket)
+                                if (relayOnline && viewMode == "list") requestSessions("", webSocket)
                             }
                             "error" -> {
                                 promptInFlight = false
@@ -661,7 +644,9 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                             }
                         }
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    onUi { appendLog(LogLine(System.currentTimeMillis(), "Msg parse error: ${e.message}")) }
+                }
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) { onUi { if (seq == connectionSeq) wsStatus = "disconnected" } }
@@ -687,7 +672,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                 hasPausedOnce = true
             } else if (event == Lifecycle.Event.ON_RESUME && hasPausedOnce && sessionCode.isNotBlank()) {
                 if (wsStatus == "connected") {
-                    if (relayOnline && showChats) requestSessions("", webSocket)
+                    if (relayOnline && viewMode == "list") requestSessions("", webSocket)
                     sessions.firstOrNull { it.id == selectedSessionId }?.let { requestSessionDetail(it, webSocket) }
                 } else {
                     connectWs(null, null)
@@ -706,9 +691,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         }
     }
 
-    LaunchedEffect(isNearBottom) {
-        stickToBottom = isNearBottom
-    }
+    LaunchedEffect(isNearBottom) { stickToBottom = isNearBottom }
 
     LaunchedEffect(logs) {
         if (logs.size > MAX_RENDERED_LOG_LINES * 2) {
@@ -719,15 +702,13 @@ fun AgentHubScreen(initialDeepLink: String = "") {
         prefs.edit().putString("LAST_TRANSCRIPT", text.takeLast(MAX_PERSISTED_TRANSCRIPT_CHARS)).apply()
         val renderedCount = consolidatedLogs().size
         if (renderedCount > 0 && stickToBottom) {
-            try {
-                listState.scrollToItem(renderedCount - 1)
-            } catch (_: Exception) {}
+            try { listState.scrollToItem(renderedCount - 1) } catch (_: Exception) {}
         }
     }
 
-    LaunchedEffect(relayOnline, showChats, webSocket) {
+    LaunchedEffect(relayOnline, viewMode, webSocket) {
         val socket = webSocket
-        if (relayOnline && showChats && socket != null) {
+        if (relayOnline && viewMode == "list" && socket != null) {
             delay(600)
             if (sessions.isEmpty()) requestSessions("", socket)
             delay(2400)
@@ -746,13 +727,11 @@ fun AgentHubScreen(initialDeepLink: String = "") {
 
     val sendMsg = {
         if ((input.isNotBlank() || attachments.isNotEmpty()) && wsStatus == "connected" && currentAgent.isNotBlank()) {
-            if (currentAgent == "codex" && selectedSessionId.isBlank()) {
-                logs = logs + LogLine(System.currentTimeMillis(), "Pick a Codex chat first. This prevents starting a new terminal session by accident.")
-            } else {
             val promptText = input.ifBlank { "Please inspect the attached file(s)." }
             logs = logs + LogLine(System.currentTimeMillis(), promptText, "user")
             val j = JSONObject(); j.put("agent", currentAgent); j.put("prompt", promptText)
             if (selectedSessionId.isNotBlank()) j.put("sessionId", selectedSessionId)
+            if (currentModel.isNotBlank()) j.put("model", currentModel)
             if (attachments.isNotEmpty()) {
                 val arr = JSONArray()
                 attachments.forEach { file ->
@@ -772,7 +751,6 @@ fun AgentHubScreen(initialDeepLink: String = "") {
                 attachments = emptyList()
             } else {
                 logs = logs + LogLine(System.currentTimeMillis(), "Error: Could not send prompt. Reconnect the relay.")
-            }
             }
         }
     }
@@ -794,6 +772,7 @@ fun AgentHubScreen(initialDeepLink: String = "") {
             if (params.containsKey("agent")) currentAgent = nextAgent
             selectedSessionId = ""
             selectedSessionTitle = ""
+            selectedSessionSubtitle = ""
             if (raw.startsWith("ws") || raw.startsWith("wss")) {
                 val port = if (uri.port > 0) ":${uri.port}" else ""
                 nextServerUrl = "${uri.scheme}://${uri.host}$port"
@@ -813,431 +792,816 @@ fun AgentHubScreen(initialDeepLink: String = "") {
     }
 
     val isConnected = wsStatus == "connected"
-    val canPrompt = isConnected && currentAgent.isNotBlank() && (currentAgent != "codex" || selectedSessionId.isNotBlank())
+    val canPrompt = isConnected && currentAgent.isNotBlank()
     val hasDraft = input.isNotBlank() || attachments.isNotEmpty()
     val canSubmit = canPrompt && hasDraft
 
-    // ─── QR Scanner ──────────────────────────────────────────────
     if (showQrScanner) { QrScanner(onScan = onQrScanned, onCancel = { showQrScanner = false }); return }
 
-    // ─── Settings ─────────────────────────────────────────────────
     if (showSettings) {
-        AlertDialog(
-            onDismissRequest = { showSettings = false },
-            title = { Text("Settings", color = Color.White, fontWeight = FontWeight.Bold) },
-            containerColor = Color(0xFF1A1A2E),
-            text = {
-                LazyColumn(modifier = Modifier.heightIn(max = 480.dp)) {
-                    item {
-                        Text("Connect", fontWeight = FontWeight.Bold, color = Color(0xFF8B5CF6), fontSize = 14.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = { showSettings = false; showQrScanner = true },
-                            modifier = Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(16.dp)),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6))
-                        ) {
-                            Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = Color.White)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Scan QR Code", color = Color.White, fontSize = 16.sp)
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(value = sessionCode, onValueChange = { sessionCode = it },
-                            label = { Text("Session Code") }, placeholder = { Text("e.g. Xk3mR9aB2q") },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF8B5CF6), focusedLabelColor = Color(0xFF8B5CF6),
-                                unfocusedTextColor = Color.White, focusedTextColor = Color.White, cursorColor = Color.White))
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(value = currentAgent, onValueChange = { currentAgent = it },
-                            label = { Text("Agent") }, placeholder = { Text("codex / opencode") },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF8B5CF6), focusedLabelColor = Color(0xFF8B5CF6),
-                                unfocusedTextColor = Color.White, focusedTextColor = Color.White, cursorColor = Color.White))
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(value = serverUrl, onValueChange = { serverUrl = it },
-                            label = { Text("Server URL") }, placeholder = { Text("wss://host:port") },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF8B5CF6), focusedLabelColor = Color(0xFF8B5CF6),
-                                unfocusedTextColor = Color.White, focusedTextColor = Color.White, cursorColor = Color.White))
-                        Spacer(Modifier.height(12.dp))
-                        Text("Model", fontWeight = FontWeight.Bold, color = Color(0xFF8B5CF6), fontSize = 14.sp)
-                        Button(
-                            onClick = { if (agentModels.isNotEmpty()) showModelPicker = true },
-                            enabled = agentModels.isNotEmpty(),
-                            modifier = Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(14.dp)),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2F255F), disabledContainerColor = Color(0xFF151518))
-                        ) {
-                            Text(
-                                if (agentModels.isEmpty()) "No models from relay yet" else currentModel.ifBlank { "Choose model" },
-                                color = if (agentModels.isEmpty()) Color(0xFF666666) else Color.White,
-                                fontSize = 13.sp
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Text("Usage", fontWeight = FontWeight.Bold, color = Color(0xFF8B5CF6), fontSize = 14.sp)
-                        Text(
-                            tokenUsage.removePrefix("tokens:").trim().ifBlank { "No token usage reported yet" },
-                            color = if (tokenUsage.isBlank()) Color(0xFF8F96A3) else Color(0xFFA7F3D0),
-                            fontSize = 12.sp
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Show command details", color = Color.White, fontSize = 13.sp)
-                                Text("Off hides terminal output and paths", color = Color(0xFF8F96A3), fontSize = 11.sp)
-                            }
-                            Switch(
-                                checked = showTechnicalEvents,
-                                onCheckedChange = {
-                                    showTechnicalEvents = it
-                                    prefs.edit().putBoolean("SHOW_TECHNICAL_EVENTS", it).apply()
-                                },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF8B5CF6))
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Button(
-                            onClick = { openUpdatePage() },
-                            modifier = Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(14.dp)),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2F255F))
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Open App Update Page", color = Color.White, fontSize = 14.sp)
-                        }
-                    }
-                }
+        SettingsDialog(
+            sessionCode = sessionCode,
+            onSessionCodeChange = { sessionCode = it },
+            serverUrl = serverUrl,
+            onServerUrlChange = { serverUrl = it },
+            currentAgent = currentAgent,
+            onCurrentAgentChange = { currentAgent = it },
+            tokenUsage = tokenUsage,
+            showTechnicalEvents = showTechnicalEvents,
+            onShowTechnicalEventsChange = {
+                showTechnicalEvents = it
+                prefs.edit().putBoolean("SHOW_TECHNICAL_EVENTS", it).apply()
             },
-            confirmButton = {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(onClick = { showSettings = false }) { Text("Cancel", color = Color.Gray) }
-                    TextButton(onClick = {
-                        prefs.edit().putString("SESSION_CODE", sessionCode).putString("SERVER_URL", serverUrl)
-                            .putString("CURRENT_AGENT", currentAgent).putBoolean("SHOW_TECHNICAL_EVENTS", showTechnicalEvents).apply()
-                        showSettings = false; connectWs(null, null)
-                    }) { Text("Save", color = Color(0xFF8B5CF6)) }
-                }
-            }
+            onScanQr = { showSettings = false; showQrScanner = true },
+            onOpenUpdatePage = { openUpdatePage() },
+            onSave = {
+                prefs.edit().putString("SESSION_CODE", sessionCode).putString("SERVER_URL", serverUrl)
+                    .putString("CURRENT_AGENT", currentAgent).putBoolean("SHOW_TECHNICAL_EVENTS", showTechnicalEvents).apply()
+                showSettings = false; connectWs(null, null)
+            },
+            onCancel = { showSettings = false }
         )
     }
 
-    // ─── Model Picker ────────────────────────────────────────────
     if (showModelPicker && agentModels.isNotEmpty()) {
-        AlertDialog(
-            onDismissRequest = { showModelPicker = false },
-            title = { Text("Model", color = Color.White, fontWeight = FontWeight.Bold) },
-            containerColor = Color(0xFF1A1A2E),
-            text = {
-                Column {
-                    agentModels.forEach { model ->
-                        val isCurrent = model == currentModel
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                val j = JSONObject(); j.put("type", "select_model")
-                                j.put("agent", currentAgent); j.put("model", model)
-                                currentModel = model
-                                webSocket?.send(j.toString()); showModelPicker = false
-                            }.padding(vertical = 10.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = isCurrent, onClick = {
-                                currentModel = model
-                                val j = JSONObject(); j.put("type", "select_model")
-                                j.put("agent", currentAgent); j.put("model", model)
-                                webSocket?.send(j.toString()); showModelPicker = false
-                            },
-                                colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF8B5CF6)))
-                            Spacer(Modifier.width(8.dp))
-                            Text(model, color = if (isCurrent) Color.White else Color(0xFFBBBBBB), fontSize = 13.sp)
-                        }
-                    }
-                }
+        ModelPickerDialog(
+            models = agentModels,
+            currentModel = currentModel,
+            onSelect = { model ->
+                val j = JSONObject(); j.put("type", "select_model")
+                j.put("agent", currentAgent); j.put("model", model)
+                currentModel = model
+                webSocket?.send(j.toString()); showModelPicker = false
             },
-            confirmButton = { TextButton(onClick = { showModelPicker = false }) { Text("Cancel", color = Color.Gray) } }
+            onCancel = { showModelPicker = false }
         )
     }
 
-    // ─── Main UI ─────────────────────────────────────────────────
-    Column(modifier = Modifier.fillMaxSize().padding(top = 44.dp, bottom = 8.dp, start = 12.dp, end = 12.dp)) {
-        // Header
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(
-                    if (isConnected && relayOnline) Color(0xFF4ADE80) else if (isConnected) Color(0xFFFBBF24) else Color(0xFFEF4444)))
-                Spacer(Modifier.width(8.dp))
-                if (currentAgent.isNotBlank()) {
-                    Text(agentName, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    if (isConnected) {
-                        Text(if (relayOnline) "  ● Relay" else "  ● Offline", color = Color(0xFF8B5CF6), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+    Box(modifier = Modifier.fillMaxSize().background(OpenCodeBlack)) {
+        when {
+            !isConnected -> ConnectScreen(
+                serverUrl = serverUrl,
+                onServerUrlChange = { serverUrl = it },
+                sessionCode = sessionCode,
+                onSessionCodeChange = { sessionCode = it },
+                onConnect = { connectWs(null, null) },
+                onScanQr = { showQrScanner = true }
+            )
+            viewMode == "list" -> ChatListScreen(
+                agentName = agentName,
+                relayOnline = relayOnline,
+                sessions = sessions,
+                sessionsLoading = sessionsLoading,
+                sessionsNotice = sessionsNotice,
+                currentAgent = currentAgent,
+                onSettings = { showSettings = true },
+                onRefresh = { requestSessions("") },
+                onNewChat = {
+                    selectedSessionId = ""
+                    selectedSessionTitle = ""
+                    selectedSessionSubtitle = ""
+                    logs = emptyList()
+                    viewMode = "chat"
+                },
+                onSelectSession = { session ->
+                    currentAgent = session.agent
+                    selectedSessionId = session.id
+                    selectedSessionTitle = session.title
+                    selectedSessionSubtitle = session.subtitle
+                    prefs.edit().putString("CURRENT_AGENT", session.agent).putString("SELECTED_SESSION_ID", session.id)
+                        .putString("SELECTED_SESSION_TITLE", session.title).putString("LAST_TRANSCRIPT", "").apply()
+                    logs = emptyList()
+                    viewMode = "chat"
+                    requestSessionDetail(session)
+                },
+                formatRelativeTime = { formatRelativeTime(it) }
+            )
+            else -> ChatScreen(
+                title = selectedSessionTitle.ifBlank { agentName },
+                subtitle = selectedSessionSubtitle.ifBlank { if (relayOnline) "Connected" else "Relay offline" },
+                agentName = agentName,
+                currentModel = currentModel,
+                agentModels = agentModels,
+                onModelPicker = { showModelPicker = true },
+                logs = logs,
+                listState = listState,
+                isNearBottom = isNearBottom,
+                onScrollToBottom = {
+                    scrollScope.launch {
+                        val count = consolidatedLogs().size
+                        stickToBottom = true
+                        if (count > 0) {
+                            listState.scrollToItem(count - 1)
+                            delay(80)
+                            listState.animateScrollToItem(count - 1)
+                        }
                     }
-                } else {
-                    Text("Agent Hub", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                },
+                onCopyTranscript = { copyVisibleTranscript() },
+                onBack = {
+                    viewMode = "list"
+                    if (relayOnline) requestSessions("")
+                },
+                onSettings = { showSettings = true },
+                input = input,
+                onInputChange = { input = it },
+                attachments = attachments,
+                onAttach = { fileLauncher.launch("*/*") },
+                onVoice = { startVoiceInput() },
+                canPrompt = canPrompt,
+                canSubmit = canSubmit,
+                promptRunning = promptRunning,
+                onSend = { sendMsg() }
+            )
+        }
+    }
+}
+
+@Composable
+fun ConnectScreen(
+    serverUrl: String,
+    onServerUrlChange: (String) -> Unit,
+    sessionCode: String,
+    onSessionCodeChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onScanQr: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().background(OpenCodeBlack).padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier.size(80.dp).clip(RoundedCornerShape(20.dp)).background(OpenCodeSurface),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("OC", color = OpenCodeGreen, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(24.dp))
+        Text("OC-mob", color = OpenCodeTextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text("Remote OpenCode from your phone", color = OpenCodeTextSecondary, fontSize = 14.sp)
+        Spacer(Modifier.height(40.dp))
+        OutlinedTextField(
+            value = serverUrl,
+            onValueChange = onServerUrlChange,
+            label = { Text("Server URL") },
+            placeholder = { Text("wss://host:port") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = OpenCodeGreen,
+                focusedLabelColor = OpenCodeGreen,
+                unfocusedBorderColor = OpenCodeBorder,
+                unfocusedTextColor = OpenCodeTextPrimary,
+                focusedTextColor = OpenCodeTextPrimary
+            )
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = sessionCode,
+            onValueChange = onSessionCodeChange,
+            label = { Text("Session Code") },
+            placeholder = { Text("e.g. Xk3mR9aB2q") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = OpenCodeGreen,
+                focusedLabelColor = OpenCodeGreen,
+                unfocusedBorderColor = OpenCodeBorder,
+                unfocusedTextColor = OpenCodeTextPrimary,
+                focusedTextColor = OpenCodeTextPrimary
+            )
+        )
+        Spacer(Modifier.height(24.dp))
+        Button(
+            onClick = onConnect,
+            modifier = Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(16.dp)),
+            colors = ButtonDefaults.buttonColors(containerColor = OpenCodeGreen)
+        ) {
+            Text("Connect", color = OpenCodeBlack, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onScanQr,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(OpenCodeBorder)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = OpenCodeTextPrimary)
+        ) {
+            Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = OpenCodeGreen)
+            Spacer(Modifier.width(8.dp))
+            Text("Scan QR Code", color = OpenCodeTextPrimary)
+        }
+    }
+}
+
+@Composable
+fun ChatListScreen(
+    agentName: String,
+    relayOnline: Boolean,
+    sessions: List<RemoteSession>,
+    sessionsLoading: Boolean,
+    sessionsNotice: String,
+    currentAgent: String,
+    onSettings: () -> Unit,
+    onRefresh: () -> Unit,
+    onNewChat: () -> Unit,
+    onSelectSession: (RemoteSession) -> Unit,
+    formatRelativeTime: (Long) -> String,
+) {
+    Column(modifier = Modifier.fillMaxSize().background(OpenCodeBlack).padding(top = 44.dp, bottom = 8.dp, start = 16.dp, end = 16.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(OpenCodeSurface),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("OC", color = OpenCodeGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("OC-mob", color = OpenCodeTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (relayOnline) "$agentName ready" else "Relay offline",
+                        color = if (relayOnline) OpenCodeGreen else Color(0xFFEF4444),
+                        fontSize = 11.sp
+                    )
                 }
             }
             Row {
-                if (isConnected && agentModels.isNotEmpty()) {
-                    TextButton(
-                        onClick = { showModelPicker = true },
-                        modifier = Modifier.height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
-                    ) {
-                        Text(currentModel.ifBlank { "Model" }, color = Color(0xFF8B5CF6), fontSize = 10.sp, maxLines = 1)
-                    }
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = OpenCodeTextSecondary)
                 }
-                if (isConnected && relayOnline) {
-                    IconButton(onClick = {
-                        showChats = !showChats
-                        prefs.edit().putBoolean("SHOW_CHATS", showChats).apply()
-                        if (showChats) requestSessions("")
-                    }) {
-                        Icon(Icons.Default.Chat, contentDescription = "Chats", tint = Color(0xFF888888))
-                    }
-                }
-                if (!isConnected) {
-                    Button(onClick = { showSettings = true },
-                        modifier = Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp)
-                    ) { Text("Connect", color = Color.White, fontSize = 13.sp) }
-                    Spacer(Modifier.width(8.dp))
-                }
-                if (isConnected && relayOnline) {
-                    IconButton(onClick = { requestSessions("") }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh sessions", tint = Color(0xFF888888))
-                    }
-                }
-                IconButton(onClick = { showSettings = true }) {
-                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color(0xFF888888))
+                IconButton(onClick = onSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = OpenCodeTextSecondary)
                 }
             }
         }
+        Spacer(Modifier.height(16.dp))
+        Text("Chats", color = OpenCodeTextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text("Recent $agentName conversations", color = OpenCodeTextSecondary, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp))
 
-        Spacer(Modifier.height(8.dp))
-
-        if (showChats && relayOnline) {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF15161A)).padding(8.dp)
-            ) {
-                item {
-                    Text("Chats", color = Color(0xFF8B5CF6), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
+        if (sessions.isEmpty()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        if (sessionsLoading) "Loading chats..." else sessionsNotice.ifBlank { "No chats yet" },
+                        color = OpenCodeTextSecondary,
+                        fontSize = 14.sp
+                    )
                 }
-                if (sessions.isEmpty()) {
-                    item {
-                        Text(
-                            if (sessionsLoading) "Loading chats..." else sessionsNotice.ifBlank { "No chats loaded yet. Tap refresh." },
-                            color = Color(0xFF9CA3AF),
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp)
-                        )
-                    }
-                }
+            }
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(sessions.take(200)) { session ->
-                    val selected = session.id == selectedSessionId
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                            .background(if (selected) Color(0xFF2F255F) else Color.Transparent)
-                            .clickable {
-                                currentAgent = session.agent
-                                selectedSessionId = session.id
-                                selectedSessionTitle = session.title
-                                logs = emptyList()
-                                prefs.edit().putString("CURRENT_AGENT", session.agent).putString("SELECTED_SESSION_ID", session.id)
-                                    .putString("SELECTED_SESSION_TITLE", session.title).putString("LAST_TRANSCRIPT", "").apply()
-                                requestSessionDetail(session)
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(if (session.agent == "codex") Color(0xFF4ADE80) else Color(0xFF60A5FA)))
-                        Spacer(Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(session.title, color = Color.White, fontSize = 12.sp, maxLines = 1)
-                            if (session.subtitle.isNotBlank()) Text(compactLocalPaths(session.subtitle), color = Color(0xFF7B7F8A), fontSize = 10.sp, maxLines = 1)
-                        }
-                        Text(AGENT_NAMES[session.agent] ?: session.agent, color = Color(0xFFB8A7FF), fontSize = 10.sp)
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-
-        // Chat area
-        Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF1E1E24)).padding(12.dp)) {
-            if (logs.isNotEmpty()) {
-                IconButton(
-                    onClick = { copyVisibleTranscript() },
-                    modifier = Modifier.align(Alignment.TopEnd).size(36.dp)
-                ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy transcript", tint = Color(0xFF888888))
-                }
-                if (!isNearBottom) {
-                    IconButton(
-                        onClick = {
-                            scrollScope.launch {
-                                val count = consolidatedLogs().size
-                                stickToBottom = true
-                                if (count > 0) {
-                                    listState.scrollToItem(count - 1)
-                                    delay(80)
-                                    listState.animateScrollToItem(count - 1)
-                                    delay(120)
-                                    listState.scrollToItem(count - 1)
-                                }
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.BottomEnd).size(44.dp)
-                            .clip(CircleShape).background(Color(0xFF3B2F79))
-                    ) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Scroll to latest", tint = Color.White)
-                    }
-                }
-            }
-            if (!isConnected) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Not connected", color = Color(0xFF666666), fontSize = 16.sp)
-                        Spacer(Modifier.height(4.dp))
-                        Text("Settings → Scan QR or enter session code", color = Color(0xFF444444), fontSize = 12.sp)
-                        Spacer(Modifier.height(24.dp))
-                        Button(onClick = { showSettings = true },
-                            modifier = Modifier.clip(RoundedCornerShape(24.dp)).height(48.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6))
-                        ) { Text("Connect", color = Color.White) }
-                    }
-                }
-            } else if (logs.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Connected", color = Color(0xFF4ADE80), fontSize = 14.sp)
-                        Spacer(Modifier.height(4.dp))
-                        Text("Send a prompt to ${if (currentAgent.isNotBlank()) agentName else "your agent"}", color = Color(0xFF444444), fontSize = 12.sp)
-                    }
-                }
-            } else {
-                LazyColumn(state = listState) {
-                    items(consolidatedLogs()) { log ->
-                        if (log.text.isNotBlank()) {
-                            val isUser = log.type == "user"
-                            val isStatus = log.type == "status" || log.text.startsWith("Error")
-                            val isTool = log.type == "tool"
-                            val isFile = log.type == "file"
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(
-                                    start = if (isUser) 32.dp else 0.dp,
-                                    top = 3.dp,
-                                    end = if (isUser) 0.dp else 32.dp,
-                                    bottom = 3.dp
-                                ),
-                                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
-                            ) {
-                                Surface(
-                                    color = when {
-                                        isStatus -> Color.Transparent
-                                        isTool -> Color(0xFF111827)
-                                        isFile -> Color(0xFF10231B)
-                                        isUser -> Color(0xFF3B2F79)
-                                        else -> Color(0xFF15161A)
-                                    },
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text(
-                                        log.text,
-                                        color = when {
-                                            log.text.startsWith("Error") -> Color(0xFFEF4444)
-                                            isStatus -> Color(0xFF8F96A3)
-                                            isTool -> Color(0xFFA7F3D0)
-                                            isFile -> Color(0xFF86EFAC)
-                                            else -> Color.White
-                                        },
-                                        fontFamily = if (isStatus || isTool || isFile) FontFamily.Monospace else FontFamily.Default,
-                                        fontSize = if (isStatus || isTool || isFile) 11.sp else 13.sp,
-                                        modifier = Modifier.padding(horizontal = if (isStatus) 0.dp else 10.dp, vertical = if (isStatus) 2.dp else 8.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // Input bar
-        if (attachments.isNotEmpty()) {
-            Text(
-                attachments.joinToString("  ") { "${it.name} (${it.size / 1024} KB)" },
-                color = Color(0xFF86EFAC),
-                fontSize = 10.sp,
-                maxLines = 1,
-                modifier = Modifier.padding(start = 58.dp, bottom = 4.dp)
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(
-                onClick = { startVoiceInput() },
-                enabled = canPrompt,
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(Color(0xFF1E1E24))
-            ) {
-                Icon(Icons.Default.Mic, contentDescription = "Voice prompt", tint = if (canPrompt) Color(0xFFA7F3D0) else Color(0xFF333333))
-            }
-            Spacer(Modifier.width(6.dp))
-            IconButton(
-                onClick = {
-                    try {
-                        fileLauncher.launch("*/*")
-                    } catch (e: Exception) {
-                        logs = logs + LogLine(System.currentTimeMillis(), "Error: File picker unavailable (${e.message})")
-                    }
-                },
-                enabled = canPrompt,
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(Color(0xFF1E1E24))
-            ) {
-                Icon(Icons.Default.AttachFile, contentDescription = "Attach file", tint = if (canPrompt) Color(0xFFB8A7FF) else Color(0xFF333333))
-            }
-            Spacer(Modifier.width(6.dp))
-            TextField(
-                value = input, onValueChange = { input = it },
-                modifier = Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).heightIn(min = 48.dp, max = 140.dp),
-                enabled = canPrompt,
-                singleLine = false,
-                minLines = 1,
-                maxLines = 6,
-                colors = TextFieldDefaults.colors(focusedContainerColor = Color(0xFF1E1E24), unfocusedContainerColor = Color(0xFF1E1E24),
-                    focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
-                    focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                    disabledContainerColor = Color(0xFF151518), disabledTextColor = Color(0xFF333333)),
-                placeholder = { Text(
-                    if (!isConnected) "Connect to send prompts"
-                    else if (currentAgent.isBlank()) "Set agent in Settings"
-                    else if (currentAgent == "codex" && selectedSessionId.isBlank()) "Pick a Codex chat first"
-                    else if (promptRunning) "Steer running turn..."
-                    else if (selectedSessionTitle.isNotBlank()) "Prompt ${selectedSessionTitle.take(24)}..."
-                    else "Prompt $agentName...",
-                    color = if (isConnected && currentAgent.isNotBlank()) Color.Gray else Color(0xFF333333)) }
-            )
-            Spacer(Modifier.width(6.dp))
-            Box(modifier = Modifier.size(48.dp).clip(CircleShape).background(
-                if (canSubmit) Color(0xFF8B5CF6) else if (promptRunning && canPrompt) Color(0xFF2F255F) else Color(0xFF1E1E24))
-                .clickable(enabled = canSubmit) { sendMsg() },
-                contentAlignment = Alignment.Center) {
-                if (promptRunning && !hasDraft) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
-                } else {
-                    Icon(
-                        Icons.Default.Send,
-                        contentDescription = if (promptRunning) "Steer turn" else "Send",
-                        tint = if (canSubmit) Color.White else Color(0xFF333333)
+                    ChatListItem(
+                        session = session,
+                        isSelected = false,
+                        currentAgent = currentAgent,
+                        formatRelativeTime = formatRelativeTime,
+                        onClick = { onSelectSession(session) }
                     )
                 }
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(24.dp)).background(OpenCodeSurface)
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Search, contentDescription = null, tint = OpenCodeTextMuted, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Search chats", color = OpenCodeTextMuted, fontSize = 14.sp)
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Button(
+                onClick = onNewChat,
+                modifier = Modifier.height(48.dp).clip(RoundedCornerShape(24.dp)),
+                colors = ButtonDefaults.buttonColors(containerColor = OpenCodeGreen),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 0.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, tint = OpenCodeBlack, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Chat", color = OpenCodeBlack, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
+}
+
+@Composable
+fun ChatListItem(
+    session: RemoteSession,
+    isSelected: Boolean,
+    currentAgent: String,
+    formatRelativeTime: (Long) -> String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .background(if (isSelected) OpenCodeSurfaceElevated else Color.Transparent)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(40.dp).clip(CircleShape).background(OpenCodeSurface),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                session.title.take(1).uppercase(),
+                color = OpenCodeGreen,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(session.title, color = OpenCodeTextPrimary, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (session.subtitle.isNotBlank()) {
+                Text(
+                    session.subtitle.replace("\\", "/").take(60),
+                    color = OpenCodeTextMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(formatRelativeTime(session.updatedAt), color = OpenCodeTextMuted, fontSize = 11.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                AGENT_NAMES[session.agent] ?: session.agent,
+                color = OpenCodeGreenLight,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+fun ChatScreen(
+    title: String,
+    subtitle: String,
+    agentName: String,
+    currentModel: String,
+    agentModels: List<String>,
+    onModelPicker: () -> Unit,
+    logs: List<LogLine>,
+    listState: LazyListState,
+    isNearBottom: Boolean,
+    onScrollToBottom: () -> Unit,
+    onCopyTranscript: () -> Unit,
+    onBack: () -> Unit,
+    onSettings: () -> Unit,
+    input: String,
+    onInputChange: (String) -> Unit,
+    attachments: List<PendingAttachment>,
+    onAttach: () -> Unit,
+    onVoice: () -> Unit,
+    canPrompt: Boolean,
+    canSubmit: Boolean,
+    promptRunning: Boolean,
+    onSend: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize().background(OpenCodeBlack).padding(top = 44.dp, bottom = 8.dp)) {
+        // Top bar
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = OpenCodeTextPrimary)
+                }
+                Spacer(Modifier.width(4.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        color = OpenCodeTextPrimary,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        subtitle,
+                        color = OpenCodeTextSecondary,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            IconButton(onClick = onSettings) {
+                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = OpenCodeTextSecondary)
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        // Model / permission pills
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PillButton(
+                label = currentModel.ifBlank { "Select model" },
+                icon = null,
+                onClick = onModelPicker,
+                enabled = agentModels.isNotEmpty(),
+                containerColor = OpenCodeSurface,
+                contentColor = OpenCodeTextPrimary
+            )
+            PillButton(
+                label = "Full access",
+                icon = Icons.Default.CheckCircle,
+                onClick = { /* toggle would go here; relay uses bypass mode */ },
+                enabled = true,
+                containerColor = OpenCodeGreen.copy(alpha = 0.15f),
+                contentColor = OpenCodeGreen
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Chat area
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (logs.isNotEmpty()) {
+                IconButton(
+                    onClick = { onCopyTranscript() },
+                    modifier = Modifier.align(Alignment.TopEnd).size(40.dp)
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy transcript", tint = OpenCodeTextMuted)
+                }
+                if (!isNearBottom) {
+                    FloatingActionButton(
+                        onClick = onScrollToBottom,
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(44.dp),
+                        containerColor = OpenCodeSurfaceElevated,
+                        contentColor = OpenCodeGreen,
+                        shape = CircleShape
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Scroll to latest")
+                    }
+                }
+            }
+            if (logs.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("No messages yet", color = OpenCodeTextSecondary, fontSize = 15.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text("Send a prompt to $agentName", color = OpenCodeTextMuted, fontSize = 12.sp)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(consolidateLogs(logs)) { log ->
+                        if (log.text.isNotBlank()) {
+                            ChatBubble(log = log)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Input area
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            if (attachments.isNotEmpty()) {
+                Text(
+                    attachments.joinToString("  ") { "${it.name} (${it.size / 1024} KB)" },
+                    color = OpenCodeGreenLight,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = 50.dp, bottom = 4.dp)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp, max = 140.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                IconButton(
+                    onClick = onAttach,
+                    enabled = canPrompt,
+                    modifier = Modifier.size(44.dp).clip(CircleShape).background(OpenCodeSurface)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Attach file", tint = if (canPrompt) OpenCodeGreen else OpenCodeTextMuted)
+                }
+                Spacer(Modifier.width(8.dp))
+                TextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(26.dp)).heightIn(min = 52.dp, max = 140.dp),
+                    enabled = canPrompt,
+                    singleLine = false,
+                    minLines = 1,
+                    maxLines = 6,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { onSend() }),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = OpenCodeSurface,
+                        unfocusedContainerColor = OpenCodeSurface,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = OpenCodeTextPrimary,
+                        unfocusedTextColor = OpenCodeTextPrimary,
+                        disabledContainerColor = OpenCodeSurfaceElevated,
+                        disabledTextColor = OpenCodeTextMuted
+                    ),
+                    placeholder = {
+                        Text(
+                            if (!canPrompt) "Connect to send prompts"
+                            else if (promptRunning) "Steer running turn..."
+                            else "Ask $agentName...",
+                            color = OpenCodeTextMuted
+                        )
+                    }
+                )
+                Spacer(Modifier.width(8.dp))
+                IconButton(
+                    onClick = onVoice,
+                    enabled = canPrompt,
+                    modifier = Modifier.size(44.dp).clip(CircleShape).background(OpenCodeSurface)
+                ) {
+                    Icon(Icons.Default.Mic, contentDescription = "Voice prompt", tint = if (canPrompt) OpenCodeGreen else OpenCodeTextMuted)
+                }
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier.size(50.dp).clip(CircleShape).background(
+                        if (canSubmit) OpenCodeGreen else if (promptRunning && canPrompt) OpenCodeGreenDark else OpenCodeSurface
+                    ).clickable(enabled = canSubmit) { onSend() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (promptRunning && !canSubmit) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = OpenCodeTextPrimary)
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = if (promptRunning) "Steer turn" else "Send",
+                            tint = if (canSubmit) OpenCodeBlack else OpenCodeTextMuted,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatBubble(log: LogLine) {
+    val isUser = log.type == "user"
+    val isStatus = log.type == "status" || log.text.startsWith("Error")
+    val isTool = log.type == "tool"
+    val isFile = log.type == "file"
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(
+            start = if (isUser) 48.dp else 0.dp,
+            end = if (isUser) 0.dp else 48.dp
+        ),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Surface(
+            color = when {
+                isStatus -> Color.Transparent
+                isTool -> OpenCodeSurface
+                isFile -> OpenCodeGreen.copy(alpha = 0.08f)
+                isUser -> OpenCodeGreen
+                else -> OpenCodeSurfaceElevated
+            },
+            shape = RoundedCornerShape(
+                topStart = 18.dp,
+                topEnd = 18.dp,
+                bottomStart = if (isUser) 18.dp else 4.dp,
+                bottomEnd = if (isUser) 4.dp else 18.dp
+            )
+        ) {
+            Text(
+                log.text,
+                color = when {
+                    log.text.startsWith("Error") -> Color(0xFFEF4444)
+                    isStatus -> OpenCodeTextSecondary
+                    isTool -> OpenCodeGreenLight
+                    isFile -> OpenCodeGreen
+                    isUser -> OpenCodeBlack
+                    else -> OpenCodeTextPrimary
+                },
+                fontFamily = if (isStatus || isTool || isFile) FontFamily.Monospace else FontFamily.Default,
+                fontSize = if (isStatus || isTool || isFile) 11.sp else 14.sp,
+                lineHeight = if (isStatus || isTool || isFile) 16.sp else 20.sp,
+                modifier = Modifier.padding(horizontal = if (isStatus) 0.dp else 14.dp, vertical = if (isStatus) 3.dp else 10.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun PillButton(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    containerColor: Color,
+    contentColor: Color,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.height(34.dp),
+        shape = RoundedCornerShape(17.dp),
+        color = containerColor,
+        contentColor = contentColor
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (icon != null) Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp))
+            Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsDialog(
+    sessionCode: String,
+    onSessionCodeChange: (String) -> Unit,
+    serverUrl: String,
+    onServerUrlChange: (String) -> Unit,
+    currentAgent: String,
+    onCurrentAgentChange: (String) -> Unit,
+    tokenUsage: String,
+    showTechnicalEvents: Boolean,
+    onShowTechnicalEventsChange: (Boolean) -> Unit,
+    onScanQr: () -> Unit,
+    onOpenUpdatePage: () -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Settings", color = OpenCodeTextPrimary, fontWeight = FontWeight.Bold) },
+        containerColor = OpenCodeSurface,
+        text = {
+            LazyColumn(modifier = Modifier.heightIn(max = 480.dp)) {
+                item {
+                    Text("Connect", fontWeight = FontWeight.Bold, color = OpenCodeGreen, fontSize = 14.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = onScanQr,
+                        modifier = Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(16.dp)),
+                        colors = ButtonDefaults.buttonColors(containerColor = OpenCodeGreen)
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = OpenCodeBlack)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Scan QR Code", color = OpenCodeBlack, fontSize = 16.sp)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = sessionCode,
+                        onValueChange = onSessionCodeChange,
+                        label = { Text("Session Code") },
+                        placeholder = { Text("e.g. Xk3mR9aB2q") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = OpenCodeGreen,
+                            focusedLabelColor = OpenCodeGreen,
+                            unfocusedBorderColor = OpenCodeBorder,
+                            unfocusedTextColor = OpenCodeTextPrimary,
+                            focusedTextColor = OpenCodeTextPrimary
+                        )
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = currentAgent,
+                        onValueChange = onCurrentAgentChange,
+                        label = { Text("Agent") },
+                        placeholder = { Text("opencode / devin") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = OpenCodeGreen,
+                            focusedLabelColor = OpenCodeGreen,
+                            unfocusedBorderColor = OpenCodeBorder,
+                            unfocusedTextColor = OpenCodeTextPrimary,
+                            focusedTextColor = OpenCodeTextPrimary
+                        )
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = serverUrl,
+                        onValueChange = onServerUrlChange,
+                        label = { Text("Server URL") },
+                        placeholder = { Text("wss://host:port") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = OpenCodeGreen,
+                            focusedLabelColor = OpenCodeGreen,
+                            unfocusedBorderColor = OpenCodeBorder,
+                            unfocusedTextColor = OpenCodeTextPrimary,
+                            focusedTextColor = OpenCodeTextPrimary
+                        )
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text("Usage", fontWeight = FontWeight.Bold, color = OpenCodeGreen, fontSize = 14.sp)
+                    Text(
+                        tokenUsage.removePrefix("tokens:").trim().ifBlank { "No token usage reported yet" },
+                        color = if (tokenUsage.isBlank()) OpenCodeTextSecondary else OpenCodeGreenLight,
+                        fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Show command details", color = OpenCodeTextPrimary, fontSize = 13.sp)
+                            Text("Off hides terminal output and paths", color = OpenCodeTextSecondary, fontSize = 11.sp)
+                        }
+                        Switch(
+                            checked = showTechnicalEvents,
+                            onCheckedChange = onShowTechnicalEventsChange,
+                            colors = SwitchDefaults.colors(checkedThumbColor = OpenCodeTextPrimary, checkedTrackColor = OpenCodeGreen)
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onOpenUpdatePage,
+                        modifier = Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(14.dp)),
+                        colors = ButtonDefaults.buttonColors(containerColor = OpenCodeSurfaceElevated)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, tint = OpenCodeGreen)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open App Update Page", color = OpenCodeTextPrimary, fontSize = 14.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = onCancel) { Text("Cancel", color = OpenCodeTextSecondary) }
+                TextButton(onClick = onSave) { Text("Save", color = OpenCodeGreen) }
+            }
+        }
+    )
+}
+
+@Composable
+fun ModelPickerDialog(
+    models: List<String>,
+    currentModel: String,
+    onSelect: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Select model", color = OpenCodeTextPrimary, fontWeight = FontWeight.Bold) },
+        containerColor = OpenCodeSurface,
+        text = {
+            LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                items(models) { model ->
+                    val isCurrent = model == currentModel
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onSelect(model) }
+                            .padding(vertical = 12.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = isCurrent,
+                            onClick = { onSelect(model) },
+                            colors = RadioButtonDefaults.colors(selectedColor = OpenCodeGreen)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(model, color = if (isCurrent) OpenCodeTextPrimary else OpenCodeTextSecondary, fontSize = 14.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onCancel) { Text("Cancel", color = OpenCodeTextSecondary) } }
+    )
 }

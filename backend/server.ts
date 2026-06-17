@@ -12,15 +12,34 @@ const SESSIONS_FILE = process.env.AGENTHUB_SESSIONS_FILE || path.join(BACKEND_RO
 const CHARSET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
 const DEFAULTS = {
-  codex:    process.env.CODEX_MODEL      || 'gpt-5.5',
-  opencode: process.env.OPENCODE_MODEL   || 'gpt-5.5',
+  opencode: process.env.OPENCODE_MODEL || 'mimo-v2-free',
+  devin:    process.env.DEVIN_MODEL    || 'devin',
 };
 
 const AGENT_MODELS = {
-  codex:    ['gpt-4o', 'gpt-4.1', 'gpt-5', 'gpt-5.5'],
-  opencode: ['gpt-4o', 'gpt-4.1', 'gpt-5', 'gpt-5.5', 'o3-mini', 'gpt-4.1-nano'],
+  opencode: [
+    'gpt-5.5', 'gpt-5.5-pro',
+    'gpt-5.4', 'gpt-5.4-pro', 'gpt-5.4-mini', 'gpt-5.4-nano',
+    'gpt-5.3-codex', 'gpt-5.3-codex-spark',
+    'gpt-5.2', 'gpt-5.2-codex', 'gpt-5.2-pro',
+    'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini',
+    'gpt-5', 'gpt-5-codex', 'gpt-5-pro', 'gpt-5-mini', 'gpt-5-nano',
+    'o3', 'o3-pro', 'o4-mini',
+    'claude-fable-5',
+    'claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6', 'claude-opus-4.5',
+    'claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-sonnet-4',
+    'claude-haiku-4.5', 'claude-haiku-3.5',
+    'gemini-3.5-flash', 'gemini-3.1-pro', 'gemini-3-flash', 'gemini-3-pro',
+    'kimi-k2.5', 'kimi-k2',
+    'qwen3-coder-480b',
+    'glm-4.7', 'glm-4.6',
+    'minimax-m2.1',
+    'trinity-large-preview',
+    'mimo-v2-free',
+  ],
+  devin:    ['devin', 'opus', 'sonnet', 'gpt-5.5'],
 };
-const MODEL_KEY = { codex: 'CODEX_MODEL', opencode: 'OPENCODE_MODEL' };
+const MODEL_KEY = { opencode: 'OPENCODE_MODEL', devin: 'DEVIN_MODEL' };
 
 const sessions = new Map();
 
@@ -127,7 +146,7 @@ const server = http.createServer((req, res) => {
     <div class="card">
       <div class="icon">AH</div>
       <h1>Agent Hub</h1>
-      <p>Control Codex and OpenCode from your phone</p>
+      <p>Control OpenCode and Devin from your phone</p>
       ${hasApk ? `<a href="/apk" class="btn">Install APK (${(fs.statSync(apkPath).size / 1024 / 1024).toFixed(1)} MB)</a>` : `<p style="color:#e88">APK not on this server.</p><p class="hint">Build locally with <code>cd AgentHub && ./gradlew assembleDebug</code> then run <code>node serve-apk.js</code> on your LAN.</p>`}
       <p class="hint">After installing, open the app and scan the QR code from your laptop's relay terminal.</p>
     </div></body></html>`);

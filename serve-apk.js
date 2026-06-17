@@ -59,7 +59,7 @@ const server = http.createServer((req, res) => {
         <div class="card">
           <div class="icon">🤖</div>
           <h1>Agent Hub</h1>
-          <p>Your local AI agent controller.<br>Codex · OpenCode</p>
+          <p>Your local AI agent controller.<br>OpenCode · Devin</p>
           <a href="/apk" class="btn">⬇ Install APK</a>
           <p class="hint">After downloading, open the file and tap "Install".<br>You may need to allow "Install from unknown sources".</p>
         </div>

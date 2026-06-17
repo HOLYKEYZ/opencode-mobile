@@ -13,9 +13,9 @@ services:
         value: 3001
       - key: NODE_VERSION
         value: 20.18.0
-      - key: CODEX_MODEL
-        sync: false
       - key: OPENCODE_MODEL
+        sync: false
+      - key: DEVIN_MODEL
         sync: false
       - key: WINDSURF_MODEL
         sync: false

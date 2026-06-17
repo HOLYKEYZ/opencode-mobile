@@ -1,7 +1,7 @@
 {
   "name": "agent-hub-backend",
   "version": "1.0.0",
-  "description": "Agent Hub - Remote mobile controller for Codex and OpenCode",
+  "description": "Agent Hub - Remote mobile controller for OpenCode and Devin",
   "main": "dist/server.js",
   "scripts": {
     "start": "node dist/server.js",
@@ -25,6 +25,8 @@
     "@types/node": "^25.9.1",
     "@types/qrcode": "^1.5.6",
     "@types/ws": "^8.18.1",
+    "level": "^10.0.0",
+    "opencode-ai": "^1.17.7",
     "typescript": "^6.0.3"
   }
 }

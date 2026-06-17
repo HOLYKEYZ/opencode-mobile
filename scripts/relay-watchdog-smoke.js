@@ -57,7 +57,6 @@ async function main() {
   const relay = startNode(path.join('dist', 'relay.js'), {
     SERVER_URL: `ws://127.0.0.1:${port}`,
     AGENTHUB_RELAY_CODE: code,
-    AGENTHUB_OPEN_CODEX_DESKTOP: '0',
   });
 
   const first = await waitForOnline('initial', 45);

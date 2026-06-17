@@ -1,8 +1,4 @@
-Agent: Codex (codex)
-Code: EtCjwygP8e
-URL: wss://agent-hub-backend-wk48.onrender.com?code=EtCjwygP8e&agent=codex
-
 Agent: OpenCode (opencode)
-Code: EtCjwygP8e
-URL: wss://agent-hub-backend-wk48.onrender.com?code=EtCjwygP8e&agent=opencode
+Code: WATCHDOG1
+URL: ws://localhost:3001?code=WATCHDOG1&agent=opencode
 
