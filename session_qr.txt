@@ -1,4 +1,3 @@
 Agent: OpenCode (opencode)
 Code: WATCHDOG1
 URL: ws://localhost:3001?code=WATCHDOG1&agent=opencode
-

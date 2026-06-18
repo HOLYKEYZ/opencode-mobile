@@ -51,10 +51,12 @@ class OcClient {
     fun isConfigured() = baseUrl.isNotBlank() && authHeader.isNotBlank()
 
     private fun get(path: String): JSONObject? {
+        val cacheBuster = if (path.contains("?")) "&_t=${System.currentTimeMillis()}" else "?_t=${System.currentTimeMillis()}"
         val request = Request.Builder()
-            .url("$baseUrl$path")
+            .url("$baseUrl$path$cacheBuster")
             .addHeader("Authorization", authHeader)
             .addHeader("Accept", "application/json")
+            .addHeader("Cache-Control", "no-cache")
             .get()
             .build()
         val response = httpClient.newCall(request).execute()
@@ -67,10 +69,12 @@ class OcClient {
     }
 
     private fun getArray(path: String): JSONArray? {
+        val cacheBuster = if (path.contains("?")) "&_t=${System.currentTimeMillis()}" else "?_t=${System.currentTimeMillis()}"
         val request = Request.Builder()
-            .url("$baseUrl$path")
+            .url("$baseUrl$path$cacheBuster")
             .addHeader("Authorization", authHeader)
             .addHeader("Accept", "application/json")
+            .addHeader("Cache-Control", "no-cache")
             .get()
             .build()
         val response = httpClient.newCall(request).execute()
@@ -205,7 +209,7 @@ class OcClient {
         }
     }
 
-    fun sendPromptAsync(sessionId: String, prompt: String, modelId: String? = null): Boolean {
+    fun sendPromptAsync(sessionId: String, prompt: String, modelId: String? = null, providerId: String? = null): Boolean {
         return try {
             val body = JSONObject().apply {
                 put("parts", JSONArray().apply {
@@ -216,13 +220,13 @@ class OcClient {
                 })
                 if (!modelId.isNullOrBlank()) {
                     put("model", JSONObject().apply {
-                        put("providerID", "opencode")
+                        put("providerID", providerId ?: "opencode-go")
                         put("modelID", modelId)
                     })
                 }
             }
-            val result = post("/session/$sessionId/prompt_async", body.toString())
-            result != null || true // 204 is also success
+            post("/session/$sessionId/prompt_async", body.toString())
+            true
         } catch (_: Exception) {
             false
         }

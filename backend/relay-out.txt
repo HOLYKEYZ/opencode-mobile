@@ -1,0 +1,15 @@
+=======================================
+  OC-mob Relay
+=======================================
+  Server:   ws://localhost:3001
+  Cwd:      C:\Users\USER\.vscode\vibe_app_slop
+  OC Port:  4096
+=======================================
+
+Starting OpenCode server on port 4096...
+  [oc-serve] exited 1
+
+Relay session: WATCHDOG1 (reused)
+
+  [opencode] Code: WATCHDOG1  |  URL: ws://localhost:3001?code=WATCHDOG1&agent=opencode
+

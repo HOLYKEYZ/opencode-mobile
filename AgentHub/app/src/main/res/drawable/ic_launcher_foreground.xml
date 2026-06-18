@@ -4,16 +4,22 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Dark rounded-square backdrop -->
+    <!-- Dark backdrop -->
     <path
         android:fillColor="#FF0A0A0C"
         android:pathData="M24,18h60a14,14 0,0 1,14 14v44a14,14 0,0 1,-14 14H24a14,14 0,0 1,-14 -14V32a14,14 0,0 1,14 -14z" />
-    <!-- Official OpenCode logo: down arrow + vertical line + horizontal bar -->
+    <!-- O letter - blocky style from OpenCode brand -->
     <path
-        android:strokeColor="#10B981"
-        android:strokeWidth="4.5"
-        android:strokeLineCap="square"
-        android:strokeLineJoin="miter"
-        android:fillColor="#00000000"
-        android:pathData="M70,57 L54,72 L38,57 M54,22 V70 M79,86 H30" />
+        android:fillColor="#FFCFCECD"
+        android:pathData="M34,34h8v20h-8z" />
+    <path
+        android:fillColor="#FF656363"
+        android:pathData="M34,34h24v8h-24zM50,34h8v20h-8zM34,46h24v8h-24z" />
+    <!-- C letter - blocky style from OpenCode brand -->
+    <path
+        android:fillColor="#FFCFCECD"
+        android:pathData="M62,34h8v20h-8z" />
+    <path
+        android:fillColor="#FF656363"
+        android:pathData="M62,34h18v8h-18zM62,46h18v8h-18zM72,34h8v8h-8z" />
 </vector>

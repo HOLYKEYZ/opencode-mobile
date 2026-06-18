@@ -138,6 +138,7 @@ fun AgentHubScreen() {
     var selectedSessionTitle by remember { mutableStateOf(prefs.getString("SELECTED_SESSION_TITLE", "") ?: "") }
     var allModels by remember { mutableStateOf<List<OcModelInfo>>(emptyList()) }
     var currentModel by remember { mutableStateOf(prefs.getString("CURRENT_MODEL", "") ?: "") }
+    var currentProvider by remember { mutableStateOf(prefs.getString("CURRENT_PROVIDER", "") ?: "") }
     var promptRunning by remember { mutableStateOf(false) }
     var showTechnicalEvents by remember { mutableStateOf(prefs.getBoolean("SHOW_TECHNICAL_EVENTS", false)) }
     var stickToBottom by remember { mutableStateOf(true) }
@@ -232,11 +233,13 @@ fun AgentHubScreen() {
         livePollThread = Thread {
             val startTime = System.currentTimeMillis()
             val maxWait = 10 * 60 * 1000L
+            var staleCount = 0
             try {
                 while (System.currentTimeMillis() - startTime < maxWait && !Thread.currentThread().isInterrupted) {
                     Thread.sleep(2500)
-                    val messages = ocClient.getSessionMessages(sessionId) ?: continue
+                    val messages = ocClient.getSessionMessages(sessionId)
                     if (messages.size > lastKnownMessageCount) {
+                        staleCount = 0
                         val newMsgs = messages.drop(lastKnownMessageCount)
                         for (msg in newMsgs) {
                             val logType = when (msg.role) {
@@ -250,8 +253,9 @@ fun AgentHubScreen() {
                             onUi { appendLog(LogLine(System.currentTimeMillis(), compactChatText(msg.text), logType)) }
                         }
                         lastKnownMessageCount = messages.size
-                        val lastRole = messages.lastOrNull()?.role
-                        if (lastRole == "assistant") {
+                    } else {
+                        staleCount++
+                        if (staleCount >= 4) {
                             onUi { promptRunning = false }
                             return@Thread
                         }
@@ -302,8 +306,8 @@ fun AgentHubScreen() {
                         appendLog(LogLine(System.currentTimeMillis(), compactChatText(msg.text), logType))
                     }
                     val lastRole = messages.lastOrNull()?.role
-                    if (lastRole == "user") {
-                        promptRunning = true
+                    if (lastRole == "user" || lastRole == "assistant") {
+                        promptRunning = lastRole == "user"
                         startLivePolling(sessionId)
                     }
                 }

@@ -1,0 +1,4 @@
+  [oc-serve] [91m[1mError: [0mUnexpected error
+  [oc-serve] ServeError
+OpenCode server failed to start.
+Warning: OpenCode server not ready. Will retry on first prompt.

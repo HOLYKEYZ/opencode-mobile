@@ -18,3 +18,15 @@ local.properties
 *.hprof
 .DS_Store
 Thumbs.db
+*.png
+*.jpg
+*.jpeg
+OCmobPrefs.xml
+backend/.env
+backend/relay-err.txt
+backend/relay-out.txt
+backend/relay.err
+backend/server.err
+backend/start-relay.bat
+backend/test-*.js
+session_qr.txt
