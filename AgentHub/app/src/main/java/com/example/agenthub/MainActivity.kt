@@ -324,6 +324,7 @@ fun AgentHubScreen() {
             return
         }
         logs = logs + LogLine(System.currentTimeMillis(), prompt, "user")
+        lastKnownMessageCount++
         promptRunning = true
         input = ""
         Thread {
@@ -332,6 +333,7 @@ fun AgentHubScreen() {
             if (!sent) {
                 onUi {
                     promptRunning = false
+                    lastKnownMessageCount--
                     appendLog(LogLine(System.currentTimeMillis(), "Error: Failed to send prompt"))
                 }
                 return@Thread
