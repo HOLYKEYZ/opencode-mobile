@@ -329,7 +329,11 @@ fun AgentHubScreen() {
         input = ""
         Thread {
             val modelToSend = currentModel.ifBlank { null }
-            val sent = ocClient.sendPromptAsync(sessionId, prompt, modelToSend)
+            var providerToSend = currentProvider.ifBlank { null }
+            if (modelToSend != null && providerToSend == null) {
+                providerToSend = allModels.firstOrNull { it.modelID == modelToSend }?.providerID
+            }
+            val sent = ocClient.sendPromptAsync(sessionId, prompt, modelToSend, providerToSend)
             if (!sent) {
                 onUi {
                     promptRunning = false
@@ -453,7 +457,8 @@ fun AgentHubScreen() {
             currentModel = currentModel,
             onSelect = { model ->
                 currentModel = model.modelID
-                prefs.edit().putString("CURRENT_MODEL", model.modelID).apply()
+                currentProvider = model.providerID
+                prefs.edit().putString("CURRENT_MODEL", model.modelID).putString("CURRENT_PROVIDER", model.providerID).apply()
                 showModelPicker = false
             },
             onCancel = { showModelPicker = false }
