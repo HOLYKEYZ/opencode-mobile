@@ -12,32 +12,34 @@ const SESSIONS_FILE = process.env.AGENTHUB_SESSIONS_FILE || path.join(BACKEND_RO
 const CHARSET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
 const DEFAULTS = {
-  opencode: process.env.OPENCODE_MODEL || 'mimo-v2-free',
+  opencode: process.env.OPENCODE_MODEL || 'mimo-v2.5-free',
   devin:    process.env.DEVIN_MODEL    || 'devin',
 };
 
 const AGENT_MODELS = {
   opencode: [
+    'mimo-v2.5-free', 'deepseek-v4-flash-free', 'north-mini-code-free',
+    'nemotron-3-ultra-free', 'big-pickle',
     'gpt-5.5', 'gpt-5.5-pro',
     'gpt-5.4', 'gpt-5.4-pro', 'gpt-5.4-mini', 'gpt-5.4-nano',
     'gpt-5.3-codex', 'gpt-5.3-codex-spark',
-    'gpt-5.2', 'gpt-5.2-codex', 'gpt-5.2-pro',
+    'gpt-5.2', 'gpt-5.2-codex',
     'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini',
-    'gpt-5', 'gpt-5-codex', 'gpt-5-pro', 'gpt-5-mini', 'gpt-5-nano',
-    'o3', 'o3-pro', 'o4-mini',
+    'gpt-5', 'gpt-5-codex', 'gpt-5-nano',
     'claude-fable-5',
-    'claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6', 'claude-opus-4.5',
-    'claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-sonnet-4',
-    'claude-haiku-4.5', 'claude-haiku-3.5',
-    'gemini-3.5-flash', 'gemini-3.1-pro', 'gemini-3-flash', 'gemini-3-pro',
-    'kimi-k2.5', 'kimi-k2',
-    'qwen3-coder-480b',
-    'glm-4.7', 'glm-4.6',
-    'minimax-m2.1',
-    'trinity-large-preview',
-    'mimo-v2-free',
+    'claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6', 'claude-opus-4.5', 'claude-opus-4.1',
+    'claude-sonnet-4.6', 'claude-sonnet-4.5',
+    'claude-haiku-4.5',
+    'gemini-3.5-flash', 'gemini-3.1-pro', 'gemini-3-flash',
+    'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus', 'qwen3.5-plus',
+    'deepseek-v4-pro', 'deepseek-v4-flash',
+    'minimax-m2.7', 'minimax-m2.5',
+    'glm-5.1', 'glm-5',
+    'kimi-k2.5', 'kimi-k2.6',
+    'grok-build-0.1',
+    'mimo-v2.5', 'mimo-v2.5-pro',
   ],
-  devin:    ['devin', 'opus', 'sonnet', 'gpt-5.5'],
+  devin:    ['devin', 'opus', 'sonnet'],
 };
 const MODEL_KEY = { opencode: 'OPENCODE_MODEL', devin: 'DEVIN_MODEL' };
 
@@ -291,7 +293,11 @@ wss.on('connection', (ws) => {
     // Relay to phone (stream results)
     if (ws._role === 'relay' && msg.clientId) {
       const t = sessions.get(msg.clientId);
-      if (t) sendToPhones(t, { type: msg.type, content: msg.content });
+      if (t) {
+        const forwarded = { ...msg };
+        delete forwarded.clientId;
+        sendToPhones(t, forwarded);
+      }
       return;
     }
 
