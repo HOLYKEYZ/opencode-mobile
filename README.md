@@ -1,176 +1,112 @@
-# opencode-devin-mobile
+# OpenCode Mobile
 
-Remote control OpenCode and Devin from your phone through a desktop relay.
+Control OpenCode and Devin from your phone through a desktop relay.
 
-<img src="proof1.jpg" alt="Agent Hub phone relay chat" width="200" />
+<table>
+  <tr>
+    <td><img src="proof1.jpg" alt="Screenshot 1" width="200" /></td>
+    <td><img src="proof2.jpg" alt="Screenshot 2" width="200" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><em>OpenCode Mobile screenshots at work</em></td>
+  </tr>
+</table>
 
-Latest phone-side debug capture showing the desktop agent stale-view case that
-the relay now tries to force-refresh after phone turns:
+## How it works
 
-<img src="proof2.jpg" alt="Agent Hub phone debug capture" width="200" />
-
-```text
-Phone --wss--> Relay Server <--wss-- Laptop relay
-                                       |-- OpenCode local server
-                                       `-- Devin CLI
+```
+Phone ──wss──> Cloud Relay Server <──wss── Desktop Relay
+                                        ├── OpenCode local server
+                                        └── Devin CLI
 ```
 
-## Features
+The cloud server is a WebSocket switchboard between your phone and your laptop. Your code, credentials, and API keys never leave your machine.
 
-- Relay-only execution: the cloud server never calls model APIs and does not need API keys.
-- QR or manual pairing: keep the same Render URL and swap only the session code/agent.
-- OpenCode support: starts or reuses the local OpenCode HTTP server, lists recent OpenCode sessions, auto-selects the most recent chat when no session is picked, and prompts the selected session.
-- Devin support: drives the local Devin CLI (`devin`) in single-turn mode, lists recent Devin sessions, auto-selects the most recent chat, and enables web search by default.
-- Live phone transcript: shows user prompts, assistant responses, thinking/status events, shell/tool activity, and file-change summaries without dumping stale terminal noise.
-- Technical event toggle: command output plus latest-turn tool/file counts stay hidden unless explicitly enabled in Settings.
-- Running-turn composer: while a turn is active, the send button shows progress; typing a draft changes it back to send so the prompt is steered into the active turn.
-- Chat controls: refresh chat lists, collapse/show the chat list, copy the visible transcript, and jump back to the latest message when scrolled up.
-- In-app update entry: Settings includes an update-page button for grabbing the latest APK.
-- Model controls: Settings and the top bar can switch the current relay model; OpenCode and Devin turns receive the selected model override.
-- Token usage: Settings keeps the latest token usage summary reported by OpenCode or Devin turns.
-- Desktop relay persistence: the relay keeps the same code across reconnects unless `backend/relay-state.json` is deleted or `AGENTHUB_RELAY_CODE` is changed.
-- Background-friendly Android client: keeps the screen awake while open, preserves the selected chat/transcript, reconnects after socket drops, and refreshes state on resume.
-- Voice input: Android/Google speech-to-text can fill the prompt box directly.
-- File upload: phone attachments are copied to `.agenthub_uploads/` on the laptop and appended to the agent prompt.
-- Multi-phone safe: every phone joined to the same session receives relay status and stream updates.
-- Offline behavior: if the laptop relay is offline, the phone receives an offline error instead of falling back to cloud execution.
-
-## Quick Start
+## Quick start
 
 The fastest way to get running is to point an OpenCode or Devin agent at this repo and ask it to set everything up for you — deploy the backend, build the Android app, and install it on your phone.
 
 If you prefer to do it manually, follow the steps below.
 
-### 1. Deploy the server
+### 1. Deploy the relay server
 
 ```bash
-git clone https://github.com/HOLYKEYZ/vibe-app-slop.git
-cd vibe-app-slop/backend
+git clone https://github.com/HOLYKEYZ/opencode-mobile.git
+cd opencode-mobile/backend
 npm install
 npm run build
 npm start
 ```
 
-Deploy `backend/` on Render as a Node.js web service. Port `3001`.
+Deploy `backend/` on Render as a Node.js web service (port `3001`).
 
-### 2. Install Android app
+### 2. Install the Android app
 
 ```bash
 cd AgentHub
 ./gradlew assembleDebug
 ```
 
-The APK is written to `AgentHub/app/build/outputs/apk/debug/app-debug.apk`.
-
-#### Install or update on a physical phone via USB
-
-1. Enable **Developer options** and **USB debugging** on your phone.
-2. Connect the phone to your computer and accept the USB-debugging authorization dialog.
-3. From the repo root run:
+Or on Windows with USB debugging enabled, install directly:
 
 ```powershell
 .\scripts\install-debug-apk.ps1 -Rebuild
 ```
 
-`-Rebuild` compiles a fresh debug APK and then installs it. If you already have a recent APK and just want to install it, omit `-Rebuild`.
-
-If the script cannot find `adb`, make sure the Android SDK platform-tools are installed and `ANDROID_HOME` or `ANDROID_SDK_ROOT` is set.
-
-You can also install manually:
-
-```powershell
-adb install -r AgentHub\app\build\outputs\apk\debug\app-debug.apk
-```
-
-> If you see `INSTALL_FAILED_USER_RESTRICTED`, check your phone screen and tap **Install** on the prompt.
-
 ### 3. Start the laptop relay
 
 ```bash
 cd backend
-npm install
 SERVER_URL=wss://your-server.onrender.com npm run relay
 ```
 
-The relay checks for signed-in local OpenCode/Devin installs and prints a QR code. Secrets stay on the laptop.
-
-On Windows PowerShell:
-
-```powershell
-cd C:\Users\USER\.vscode\vibe_app_slop\backend
-$env:SERVER_URL="wss://agent-hub-backend-wk48.onrender.com"
-npm run relay
-```
-
-For the current Windows laptop workflow, use the keep-awake launcher from the repo root:
-
-```powershell
-.\scripts\start-relay-keepawake.ps1 -RelayCode EtCjwygP8e
-```
-
-That script sets the current Windows power plan to keep the machine awake and to do nothing on lid close for AC and battery power, then starts the relay in the background with logs in `%TEMP%`. Use `-Foreground` if you want the relay output in the current terminal, or `-SkipPowerConfig` if you only want to start the relay.
-
-To force a new code:
-
-```powershell
-Remove-Item .\relay-state.json -Force -ErrorAction SilentlyContinue
-$env:SERVER_URL="wss://agent-hub-backend-wk48.onrender.com"
-npm run relay
-```
+The relay checks for local OpenCode/Devin installs and prints a QR code.
 
 ### 4. Connect your phone
 
-Open Agent Hub, scan the QR code, pick a visible chat, and send a prompt.
+Open Agent Hub, scan the QR code, pick a chat, and send a prompt.
 
-### 5. Smoke test the relay
+## Features
 
-From the repo root, run a phone-style join/list/detail/reconnect check without sending any prompts:
-
-```powershell
-$env:SERVER_URL="wss://agent-hub-backend-wk48.onrender.com"
-$env:RELAY_CODE="EtCjwygP8e"
-node .\scripts\relay-smoke.js
-```
-
-To also verify phone-to-OpenCode prompt execution and `done` handling, opt in explicitly:
-
-```powershell
-$env:SMOKE_EXECUTE_OPENCODE="1"
-node .\scripts\relay-smoke.js
-```
-
-To include a small text attachment in that OpenCode prompt smoke:
-
-```powershell
-$env:SMOKE_ATTACH_FILE="1"
-node .\scripts\relay-smoke.js
-```
+- **Relay-only execution** — the cloud server never calls model APIs and does not need API keys
+- **QR or manual pairing** — keep the same server URL and swap only the session code/agent
+- **OpenCode support** — starts or reuses the local OpenCode HTTP server, lists sessions, auto-selects the most recent chat
+- **Devin support** — drives the local Devin CLI in single-turn mode, lists sessions, web search enabled by default
+- **Live transcript** — shows prompts, responses, thinking events, shell activity, and file changes without stale terminal noise
+- **Technical event toggle** — command output and tool/file counts stay hidden unless enabled
+- **Running-turn composer** — progress indicator while a turn is active; typing redirects into the active turn
+- **Chat controls** — refresh lists, collapse/show, copy transcript, jump to latest message
+- **In-app updates** — Settings includes an update button for grabbing the latest APK
+- **Model controls** — switch the current model from Settings or the top bar
+- **Token usage** — Settings keeps the latest token usage summary
+- **Relay persistence** — the relay keeps the same code across reconnects unless `backend/relay-state.json` is deleted
+- **Background-friendly** — keeps screen awake, preserves chat/transcript, reconnects after drops
+- **Voice input** — Google speech-to-text fills the prompt box directly
+- **File upload** — attachments are copied to `.agenthub_uploads/` on the laptop and appended to the agent prompt
+- **Multi-phone** — every phone on the same session gets relay status and stream updates
+- **Offline handling** — the phone shows an offline error if the laptop relay is down
 
 ## Agents
 
 | Agent | How it is driven |
 |-------|------------------|
-| OpenCode | Local `opencode serve` HTTP API on `127.0.0.1:4096`; auto-selects the most recent chat if none is picked |
-| Devin | Local `devin` CLI in single-turn mode (`devin --permission-mode bypass -p -- <prompt>`); auto-selects the most recent session if none is picked; web search is enabled by default |
-
-`backend/server.ts` and `backend/relay.ts` are the backend source files. Runtime JavaScript is generated into `backend/dist/` by `npm run build`.
+| OpenCode | Local `opencode serve` HTTP API on `127.0.0.1:4096` |
+| Devin | Local `devin` CLI in single-turn mode with web search enabled |
 
 ## Environment
 
 | Env | Default | Description |
 |-----|---------|-------------|
 | `PORT` | `3001` | Relay server port |
-| `SERVER_URL` | `ws://localhost:3001` | Relay server URL used by the compiled relay |
+| `SERVER_URL` | `ws://localhost:3001` | Relay server URL |
 | `AGENTHUB_CWD` | repo root | Working directory for local agents |
 | `OPENCODE_PORT` | `4096` | Local OpenCode server port |
 | `DEVIN_PATH` | `devin` | Path to the Devin CLI binary |
-| `DEVIN_SESSION_DIR` | `~/.local/share/devin/sessions` | Directory for Devin session storage |
+| `DEVIN_SESSION_DIR` | `~/.local/share/devin/sessions` | Devin session storage |
 | `AGENTHUB_RELAY_CODE` | unset | Optional fixed relay code |
 
 ## Notes
 
-- The phone app can keep `wss://agent-hub-backend-wk48.onrender.com` as the server URL. The session code and selected agent are separate settings.
-- The cloud server is only a WebSocket switchboard between phone and laptop relay. OpenCode/Devin credentials and files stay on the laptop.
-- The relay can survive the lid closing only if Windows stays awake. Use `scripts/start-relay-keepawake.ps1` or set your power plan manually.
+- OpenCode/Devin credentials and files stay on the laptop. The cloud server is only a switchboard.
+- The relay survives lid closing only if Windows stays awake. Use `scripts/start-relay-keepawake.ps1` or set your power plan manually.
 - Uploads are stored under `.agenthub_uploads/` in the relay working directory.
-- If the exact screenshot asset is needed, save it under `docs/screenshots/` and replace the README image path.
