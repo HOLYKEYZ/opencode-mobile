@@ -2,12 +2,12 @@
 
 Remote control OpenCode and Devin from your phone through a desktop relay.
 
-<img src="proof1.jpg" alt="Agent Hub phone relay chat" width="300" />
+<img src="proof1.jpg" alt="Agent Hub phone relay chat" width="200" />
 
 Latest phone-side debug capture showing the desktop agent stale-view case that
 the relay now tries to force-refresh after phone turns:
 
-<img src="proof2.jpg" alt="Agent Hub phone debug capture" width="300" />
+<img src="proof2.jpg" alt="Agent Hub phone debug capture" width="200" />
 
 ```text
 Phone --wss--> Relay Server <--wss-- Laptop relay
