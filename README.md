@@ -2,12 +2,12 @@
 
 Remote control OpenCode and Devin from your phone through a desktop relay.
 
-![Agent Hub phone relay chat](proof1.jpg)
+<img src="proof1.jpg" alt="Agent Hub phone relay chat" width="300" />
 
 Latest phone-side debug capture showing the desktop agent stale-view case that
 the relay now tries to force-refresh after phone turns:
 
-![Agent Hub phone debug capture](proof2.jpg)
+<img src="proof2.jpg" alt="Agent Hub phone debug capture" width="300" />
 
 ```text
 Phone --wss--> Relay Server <--wss-- Laptop relay
@@ -37,6 +37,10 @@ Phone --wss--> Relay Server <--wss-- Laptop relay
 
 ## Quick Start
 
+The fastest way to get running is to point an OpenCode or Devin agent at this repo and ask it to set everything up for you — deploy the backend, build the Android app, and install it on your phone.
+
+If you prefer to do it manually, follow the steps below.
+
 ### 1. Deploy the server
 
 ```bash
@@ -58,11 +62,27 @@ cd AgentHub
 
 The APK is written to `AgentHub/app/build/outputs/apk/debug/app-debug.apk`.
 
-On Windows with USB debugging enabled, install the current debug APK directly:
+#### Install or update on a physical phone via USB
+
+1. Enable **Developer options** and **USB debugging** on your phone.
+2. Connect the phone to your computer and accept the USB-debugging authorization dialog.
+3. From the repo root run:
 
 ```powershell
 .\scripts\install-debug-apk.ps1 -Rebuild
 ```
+
+`-Rebuild` compiles a fresh debug APK and then installs it. If you already have a recent APK and just want to install it, omit `-Rebuild`.
+
+If the script cannot find `adb`, make sure the Android SDK platform-tools are installed and `ANDROID_HOME` or `ANDROID_SDK_ROOT` is set.
+
+You can also install manually:
+
+```powershell
+adb install -r AgentHub\app\build\outputs\apk\debug\app-debug.apk
+```
+
+> If you see `INSTALL_FAILED_USER_RESTRICTED`, check your phone screen and tap **Install** on the prompt.
 
 ### 3. Start the laptop relay
 

@@ -26,11 +26,15 @@ if (-not (Test-Path -LiteralPath $ApkPath)) {
 }
 
 $adbCandidates = @(
-    (Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"),
-    (if ($env:ANDROID_HOME) { Join-Path $env:ANDROID_HOME "platform-tools\adb.exe" }),
-    (if ($env:ANDROID_SDK_ROOT) { Join-Path $env:ANDROID_SDK_ROOT "platform-tools\adb.exe" }),
-    "adb"
-) | Where-Object { $_ }
+    (Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe")
+)
+if ($env:ANDROID_HOME) {
+    $adbCandidates += Join-Path $env:ANDROID_HOME "platform-tools\adb.exe"
+}
+if ($env:ANDROID_SDK_ROOT) {
+    $adbCandidates += Join-Path $env:ANDROID_SDK_ROOT "platform-tools\adb.exe"
+}
+$adbCandidates += "adb"
 
 $adb = $null
 foreach ($candidate in $adbCandidates) {
