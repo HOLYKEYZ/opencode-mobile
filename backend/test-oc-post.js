@@ -3,6 +3,7 @@ const auth = 'Basic ' + Buffer.from('opencode:37e27954-9586-4226-89b5-bf063e7972
 async function test() {
   console.log('Testing OC API POST...');
   const start = Date.now();
+  let success = true;
   
   // Try the async endpoint first
   try {
@@ -17,6 +18,7 @@ async function test() {
     console.log('Response:', text.slice(0, 500));
   } catch (e) {
     console.log(`POST /prompt failed: ${e.message} in ${Date.now()-start}ms`);
+    success = false;
   }
 
   // Try the original endpoint with abort
@@ -36,7 +38,9 @@ async function test() {
     console.log('Response:', text.slice(0, 500));
   } catch (e) {
     console.log(`POST /message failed: ${e.message} in ${Date.now()-start2}ms`);
+    success = false;
   }
+  if (!success) process.exit(1);
 }
 
 test();
